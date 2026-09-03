@@ -51,12 +51,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let sliding = reveal < 1.0;
     let mut panel = egui::Panel::left("sidebar")
         .show_separator_line(false)
-        .frame(Frame::new().fill(palette.panel).inner_margin(Margin {
-            left: 12,
-            right: 8,
-            top,
-            bottom: 8,
-        }));
+        .frame(
+            Frame::new()
+                .fill(theme::chrome_fill(palette.panel))
+                .inner_margin(Margin {
+                    left: 12,
+                    right: 8,
+                    top,
+                    bottom: 8,
+                }),
+        );
     panel = if sliding {
         panel
             .resizable(false)

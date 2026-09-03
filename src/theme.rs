@@ -95,6 +95,36 @@ impl Palette {
     }
 }
 
+/// How much of the panel colour survives where the desktop shows through.
+/// Enough that text keeps its contrast, little enough that the blur reads as
+/// a material rather than a tint.
+const VIBRANCY_OPACITY: f32 = 0.68;
+
+/// Whether the window's chrome is a translucent material over the desktop.
+pub fn vibrant() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::mac_vibrancy::active()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// The fill for the window's chrome: the sidebar, the player bar, and the side
+/// panels. On macOS these are the parts the desktop shows through, which is
+/// the material every application with a sidebar is built on there. Everywhere
+/// else, and wherever the person has asked macOS to reduce transparency, this
+/// is the flat colour it always was.
+pub fn chrome_fill(base: Color32) -> Color32 {
+    if vibrant() {
+        base.gamma_multiply(VIBRANCY_OPACITY)
+    } else {
+        base
+    }
+}
+
 pub const RADIUS: u8 = 8;
 pub const RADIUS_SMALL: u8 = 4;
 pub const ROW_HEIGHT: f32 = 56.0;

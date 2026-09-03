@@ -590,6 +590,10 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false)
+            // See-through so the blurred layer underneath can show at the
+            // window's edges. Nothing shows through where the interface
+            // paints itself opaque, which is everywhere but the chrome.
+            .with_transparent(cfg!(target_os = "macos"))
             // Windows has no equivalent to macOS's floating traffic lights.
             // Removing its decorations lets the app surface fill the window.
             .with_decorations(main_window_decorated(cfg!(windows)))
@@ -699,6 +703,14 @@ impl Shell {
 
 impl eframe::App for Shell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        if self
+            .app
+            .as_ref()
+            .is_some_and(|app| !app.settings.winamp_window)
+        {
+            fastpotify::mac_vibrancy::install();
+        }
         if let Some(app) = self.app.as_mut() {
             #[cfg(target_os = "macos")]
             for command in fastpotify::mac_menu::drain_commands() {
@@ -778,8 +790,14 @@ impl eframe::App for Shell {
             .app
             .as_ref()
             .is_some_and(|app| app.settings.winamp_window)
+            || fastpotify::theme::vibrant()
         {
             [0.0; 4]
+        } else if cfg!(target_os = "macos") {
+            // The macOS window is see-through so the blurred layer can show.
+            // Without that layer, because the desktop asked for less
+            // transparency, nothing may show through it at all.
+            egui::Color32::from_rgb(12, 12, 12).to_normalized_gamma_f32()
         } else {
             egui::Color32::from_rgba_unmultiplied(12, 12, 12, 180).to_normalized_gamma_f32()
         }
