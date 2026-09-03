@@ -690,7 +690,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if loading {
-                super::widgets::loading_row(ui, &palette);
+                super::skeleton::track_rows(ui, &palette, 6, true);
             }
             if let Some(error) = &error {
                 super::widgets::error_row(ui, app, error, None);

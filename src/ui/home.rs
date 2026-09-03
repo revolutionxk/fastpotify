@@ -7,6 +7,7 @@ use crate::app::App;
 use crate::model::{Action, DISCOVER_TERMS, Loadable, Page, RowContext};
 use crate::theme::{self, Icon};
 
+use super::skeleton;
 use super::widgets::{self, TrackRow};
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
@@ -178,7 +179,9 @@ fn made_for_you(app: &mut App, ui: &mut egui::Ui) {
     }
     widgets::shelf(ui, &palette, "made-for-you", "Made for you", |ui| {
         if playlists.is_empty() && loading {
-            widgets::loading_row(ui, &palette);
+            for _ in 0..4 {
+                skeleton::card(ui, &palette, false);
+            }
         } else if playlists.is_empty() && failed {
             widgets::error_row(ui, app, "Couldn't load this shelf", Some(Page::Home));
         }
@@ -218,9 +221,7 @@ fn recently_played(app: &mut App, ui: &mut egui::Ui) {
     let history = match app.home.recently_played.clone() {
         Loadable::Loaded(history) => history,
         Loadable::Loading | Loadable::NotLoaded => {
-            widgets::shelf(ui, &palette, "recent", "Recently played", |ui| {
-                widgets::loading_row(ui, &palette)
-            });
+            skeleton::shelf(ui, &palette, "Recently played", 6, false);
             return;
         }
         Loadable::Failed(message) => {
@@ -279,9 +280,7 @@ fn top_artists(app: &mut App, ui: &mut egui::Ui) {
     let artists = match app.home.top_artists.clone() {
         Loadable::Loaded(artists) => artists,
         Loadable::Loading | Loadable::NotLoaded => {
-            widgets::shelf(ui, &palette, "top-artists", "Your top artists", |ui| {
-                widgets::loading_row(ui, &palette)
-            });
+            skeleton::shelf(ui, &palette, "Your top artists", 6, true);
             return;
         }
         Loadable::Failed(message) => {
@@ -340,7 +339,13 @@ fn track_list(
             } else {
                 theme::section_title(ui, &palette, title);
             }
-            widgets::loading_row(ui, &palette);
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = widgets::CARD_GAP / 2.0;
+                for _ in 0..6 {
+                    skeleton::card(ui, &palette, false);
+                }
+            });
             ui.add_space(12.0);
             return;
         }

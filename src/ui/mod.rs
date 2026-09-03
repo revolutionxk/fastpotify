@@ -15,6 +15,7 @@ pub mod search;
 pub mod settings;
 pub mod show;
 pub mod sidebar;
+pub mod skeleton;
 pub mod topbar;
 pub mod widgets;
 pub mod winamp;

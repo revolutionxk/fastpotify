@@ -25,7 +25,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let results = match &app.search.results {
         Loadable::Loaded(results) => results.clone(),
         Loadable::Loading | Loadable::NotLoaded => {
-            widgets::loading_row(ui, &palette);
+            super::skeleton::track_rows(ui, &palette, 8, false);
             return;
         }
         Loadable::Failed(error) => {

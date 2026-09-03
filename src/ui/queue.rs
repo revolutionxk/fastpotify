@@ -172,7 +172,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
     let queue = match &app.queue {
         Loadable::Loaded(queue) => queue.clone(),
         Loadable::Loading | Loadable::NotLoaded => {
-            widgets::loading_row(ui, &palette);
+            super::skeleton::track_rows(ui, &palette, 4, true);
             return;
         }
         Loadable::Failed(error) => {
@@ -275,7 +275,7 @@ fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
 
     if items.is_empty() {
         if loading {
-            widgets::loading_row(ui, &palette);
+            super::skeleton::track_rows(ui, &palette, 4, true);
             return;
         }
         if let Some(err) = error {
@@ -298,7 +298,7 @@ fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
                 "Played songs appear here.",
             );
         } else {
-            widgets::loading_row(ui, &palette);
+            super::skeleton::track_rows(ui, &palette, 4, true);
         }
         return;
     }
@@ -347,7 +347,7 @@ fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
     // Footer: loading more or load more trigger
     if loading {
         ui.add_space(8.0);
-        widgets::loading_row(ui, &palette);
+        super::skeleton::track_rows(ui, &palette, 4, true);
     } else if !complete {
         ui.add_space(8.0);
         // Auto-load when near end, plus manual button as fallback.

@@ -110,7 +110,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     };
     let lyrics = match &app.lyrics {
         Loadable::NotLoaded | Loadable::Loading => {
-            widgets::loading_row(ui, &palette);
+            super::skeleton::lines(ui, &palette, 8);
             return;
         }
         Loadable::Failed(error) => {
