@@ -121,24 +121,42 @@ pub fn titlebar_inset(ctx: &egui::Context) -> f32 {
     }
 }
 
-const INTER_MEDIUM: &str = "inter-medium";
-const INTER_SEMIBOLD: &str = "inter-semibold";
-const INTER_BOLD: &str = "inter-bold";
+const UI_MEDIUM: &str = "ui-medium";
+const UI_SEMIBOLD: &str = "ui-semibold";
+const UI_BOLD: &str = "ui-bold";
+const UI_DISPLAY: &str = "ui-display";
+const UI_DISPLAY_MEDIUM: &str = "ui-display-medium";
+const UI_DISPLAY_SEMIBOLD: &str = "ui-display-semibold";
+const UI_DISPLAY_BOLD: &str = "ui-display-bold";
+
+/// Where the interface face changes optical cut, the same size Apple's own
+/// text and display faces part at. Below it letters are drawn wider and more
+/// loosely spaced so small text stays legible; above it they tighten.
+const DISPLAY_FROM: f32 = 20.0;
+
+fn cut(size: f32, text: &'static str, display: &'static str) -> egui::FontId {
+    let family = if size >= DISPLAY_FROM { display } else { text };
+    egui::FontId::new(size, egui::FontFamily::Name(family.into()))
+}
 
 pub fn regular(size: f32) -> egui::FontId {
-    egui::FontId::new(size, egui::FontFamily::Proportional)
+    if size >= DISPLAY_FROM {
+        egui::FontId::new(size, egui::FontFamily::Name(UI_DISPLAY.into()))
+    } else {
+        egui::FontId::new(size, egui::FontFamily::Proportional)
+    }
 }
 
 pub fn medium(size: f32) -> egui::FontId {
-    egui::FontId::new(size, egui::FontFamily::Name(INTER_MEDIUM.into()))
+    cut(size, UI_MEDIUM, UI_DISPLAY_MEDIUM)
 }
 
 pub fn semibold(size: f32) -> egui::FontId {
-    egui::FontId::new(size, egui::FontFamily::Name(INTER_SEMIBOLD.into()))
+    cut(size, UI_SEMIBOLD, UI_DISPLAY_SEMIBOLD)
 }
 
 pub fn bold(size: f32) -> egui::FontId {
-    egui::FontId::new(size, egui::FontFamily::Name(INTER_BOLD.into()))
+    cut(size, UI_BOLD, UI_DISPLAY_BOLD)
 }
 
 /// Install fonts, icons, and the base style once.
@@ -219,7 +237,10 @@ pub fn apply(ctx: &egui::Context, palette: &Palette) {
         (TextStyle::Small, FontId::new(11.5, Proportional)),
         (TextStyle::Body, FontId::new(14.0, Proportional)),
         (TextStyle::Button, FontId::new(14.0, Proportional)),
-        (TextStyle::Heading, FontId::new(22.0, Proportional)),
+        (
+            TextStyle::Heading,
+            FontId::new(22.0, egui::FontFamily::Name(UI_DISPLAY.into())),
+        ),
         (TextStyle::Monospace, FontId::new(13.0, Monospace)),
     ]
     .into();
@@ -250,28 +271,73 @@ pub fn apply(ctx: &egui::Context, palette: &Palette) {
     ctx.set_global_style(style);
 }
 
+/// The interface face and the axis positions that give it its weights.
+///
+/// San Francisco's weight axis is not the usual hundreds: its own named
+/// instances put Medium at 510 and Semibold at 590, so asking for 500 or 600
+/// would draw neither. Its optical axis rests at the display cut, which is
+/// wrong for the sizes most of this interface is set in, so both ends are
+/// named here rather than left to the font's defaults.
+struct Face {
+    data: &'static [u8],
+    regular: f32,
+    medium: f32,
+    semibold: f32,
+    bold: f32,
+    text_optical: f32,
+    display_optical: f32,
+}
+
+fn interface_face() -> Face {
+    #[cfg(target_os = "macos")]
+    if let Some(data) = crate::system_fonts::interface_face() {
+        return Face {
+            data,
+            regular: 400.0,
+            medium: 510.0,
+            semibold: 590.0,
+            bold: 700.0,
+            text_optical: 17.0,
+            display_optical: 28.0,
+        };
+    }
+    Face {
+        data: include_bytes!("../assets/fonts/InterVariable.ttf"),
+        regular: 400.0,
+        medium: 500.0,
+        semibold: 600.0,
+        bold: 700.0,
+        text_optical: 14.0,
+        display_optical: 28.0,
+    }
+}
+
 fn install_fonts(ctx: &egui::Context) {
     use egui::epaint::text::VariationCoords;
     use egui::{FontData, FontDefinitions, FontFamily};
     use std::sync::Arc;
 
     let mut fonts = FontDefinitions::default();
-    let inter = include_bytes!("../assets/fonts/InterVariable.ttf");
-    let weighted = |weight: f32| {
-        let mut data = FontData::from_static(inter);
-        data.tweak.coords = VariationCoords::new([(b"wght", weight)]);
+    let face = interface_face();
+    let cut = |weight: f32, optical: f32| {
+        let mut data = FontData::from_static(face.data);
+        data.tweak.coords = VariationCoords::new([(b"wght", weight), (b"opsz", optical)]);
         Arc::new(data)
     };
-    fonts.font_data.insert("inter".to_owned(), weighted(400.0));
-    fonts
-        .font_data
-        .insert(INTER_MEDIUM.to_owned(), weighted(500.0));
-    fonts
-        .font_data
-        .insert(INTER_SEMIBOLD.to_owned(), weighted(600.0));
-    fonts
-        .font_data
-        .insert(INTER_BOLD.to_owned(), weighted(700.0));
+    for (name, weight, optical) in [
+        ("ui", face.regular, face.text_optical),
+        (UI_MEDIUM, face.medium, face.text_optical),
+        (UI_SEMIBOLD, face.semibold, face.text_optical),
+        (UI_BOLD, face.bold, face.text_optical),
+        (UI_DISPLAY, face.regular, face.display_optical),
+        (UI_DISPLAY_MEDIUM, face.medium, face.display_optical),
+        (UI_DISPLAY_SEMIBOLD, face.semibold, face.display_optical),
+        (UI_DISPLAY_BOLD, face.bold, face.display_optical),
+    ] {
+        fonts
+            .font_data
+            .insert(name.to_owned(), cut(weight, optical));
+    }
 
     let noto_emoji = include_bytes!("../assets/fonts/NotoEmoji.ttf");
     fonts.font_data.insert(
@@ -283,7 +349,7 @@ fn install_fonts(ctx: &egui::Context) {
         .families
         .entry(FontFamily::Proportional)
         .or_default()
-        .insert(0, "inter".to_owned());
+        .insert(0, "ui".to_owned());
     // Right behind the text face, ahead of the emoji subset and the icon
     // font egui bundles, so every emoji comes from the one full face and
     // wears the same style; egui's pair still serves what Noto lacks.
@@ -302,14 +368,23 @@ fn install_fonts(ctx: &egui::Context) {
         .skip(1)
         .cloned()
         .collect();
-    for name in [INTER_MEDIUM, INTER_SEMIBOLD, INTER_BOLD] {
+    for name in [
+        UI_MEDIUM,
+        UI_SEMIBOLD,
+        UI_BOLD,
+        UI_DISPLAY,
+        UI_DISPLAY_MEDIUM,
+        UI_DISPLAY_SEMIBOLD,
+        UI_DISPLAY_BOLD,
+    ] {
         let mut family = vec![name.to_owned()];
         family.extend(fallbacks.iter().cloned());
         fonts.families.insert(FontFamily::Name(name.into()), family);
     }
 
-    // Add installed fallbacks for scripts Inter does not cover. Keep them after
-    // Inter and the emoji font to preserve Latin shapes and color emoji.
+    // Add installed fallbacks for scripts the interface face does not cover.
+    // Keep them after it and the emoji font to preserve Latin shapes and
+    // colour emoji.
     for font in crate::system_fonts::fallbacks() {
         // Reuse cached font bytes to avoid copying large collections whenever
         // epaint rebuilds the glyph atlas.

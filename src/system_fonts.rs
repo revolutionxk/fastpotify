@@ -78,6 +78,59 @@ pub fn fallbacks() -> &'static [Fallback] {
     FONTS.get_or_init(load)
 }
 
+/// The desktop's own interface face, where the platform keeps one Fastpotify
+/// can draw with directly. macOS ships San Francisco as a plain variable TTF,
+/// and using it is most of what makes text here look like the rest of the
+/// machine. Nothing is bundled: the file is the one already installed.
+#[cfg(target_os = "macos")]
+pub fn interface_face() -> Option<&'static [u8]> {
+    const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/SFNS.ttf",
+        "/System/Library/Fonts/SFNSDisplay.ttf",
+        "/System/Library/Fonts/SFNSText.ttf",
+    ];
+    static FACE: OnceLock<Option<&'static [u8]>> = OnceLock::new();
+    *FACE.get_or_init(|| {
+        CANDIDATES
+            .iter()
+            .find_map(|path| map_interface_face(Path::new(path)))
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn map_interface_face(path: &Path) -> Option<&'static [u8]> {
+    let file = std::fs::File::open(path).ok()?;
+    // Safety: the same bet every font enumerator on the platform makes, and
+    // this mapping is of a file macOS replaces only by installing an update.
+    // Mapping rather than reading keeps San Francisco's eight megabytes shared
+    // with every other application instead of copied into this process.
+    let map = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+    let bytes: &'static [u8] = &*Box::leak(Box::new(map));
+    draws_latin_on_both_axes(bytes).then_some(bytes)
+}
+
+/// Whether a face is the variable Latin one this expects. A macOS that moves
+/// or changes San Francisco leaves the bundled face in place rather than
+/// drawing nothing.
+#[cfg(target_os = "macos")]
+fn draws_latin_on_both_axes(bytes: &[u8]) -> bool {
+    let Ok(font) = skrifa::FontRef::new(bytes) else {
+        return false;
+    };
+    let axes = font.axes();
+    let carries = |tag: &[u8; 4]| axes.iter().any(|axis| axis.tag() == skrifa::Tag::new(tag));
+    if !carries(b"wght") || !carries(b"opsz") {
+        return false;
+    }
+    let charmap = font.charmap();
+    let outlines = font.outline_glyphs();
+    ['A', 'g', '0'].iter().all(|character| {
+        charmap
+            .map(*character)
+            .is_some_and(|glyph| outlines.get(glyph).is_some())
+    })
+}
+
 /// The face Winamp's playlists were drawn in, or the nearest this desktop
 /// carries: Arial, then the metric twins that stand in for it on Linux,
 /// then a plain sans. `None` leaves it to the interface font.
