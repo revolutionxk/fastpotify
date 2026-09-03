@@ -45,15 +45,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     player_bar::show(app, ui);
-    if app.settings.sidebar_visible {
-        sidebar::show(app, ui);
-    }
-    if app.show_queue_panel {
-        queue::side_panel(app, ui);
-    }
-    if app.show_lyrics_panel {
-        lyrics::side_panel(app, ui);
-    }
+    sidebar::show(app, ui);
+    queue::side_panel(app, ui);
+    lyrics::side_panel(app, ui);
     central(app, ui);
     devices::popup(app, ctx);
     dialogs::show(app, ctx);
@@ -102,6 +96,92 @@ fn page_tint(app: &mut App) -> Option<Color32> {
     }
 }
 
+/// A side panel's share of its full width, springing between nothing and all
+/// of it. Zero means it is gone and must not be drawn; one means it is at rest
+/// and behaves exactly as it did before, resize handle and all.
+pub fn reveal(ui: &egui::Ui, id: &str, open: bool) -> f32 {
+    // Seeded wherever it already is, so a panel that starts open is open on
+    // the first frame instead of sliding in at launch.
+    theme::motion::value(
+        ui,
+        egui::Id::new(("panel-reveal", id)),
+        if open { 1.0 } else { 0.0 },
+        theme::motion::GENTLE,
+    )
+}
+
+/// The width a panel occupies part way in. Never quite zero: egui measures the
+/// resize handle inside it.
+pub fn revealed_width(full: f32, reveal: f32) -> f32 {
+    (full * reveal).max(1.0)
+}
+
+pub fn revealed_opacity(reveal: f32) -> f32 {
+    theme::motion::Curve::EaseOut.apply(((reveal - 0.15) / 0.85).clamp(0.0, 1.0))
+}
+
+/// Lays a panel's contents out at the width they will have once the panel is
+/// all the way in, anchored to the edge it grows from, so an arriving panel
+/// carries its contents along instead of reflowing them at every width on the
+/// way. Whatever hangs past the panel is clipped.
+pub fn slid<R>(
+    ui: &mut egui::Ui,
+    full_inner: f32,
+    from_left: bool,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let rect = ui.max_rect();
+    if full_inner <= rect.width() + 0.5 {
+        return add(ui);
+    }
+    let content = if from_left {
+        Rect::from_min_max(egui::pos2(rect.right() - full_inner, rect.top()), rect.max)
+    } else {
+        Rect::from_min_size(rect.min, vec2(full_inner, rect.height()))
+    };
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(content)
+            .layout(*ui.layout()),
+    );
+    let inner = add(&mut child);
+    ui.allocate_rect(rect, egui::Sense::hover());
+    inner
+}
+
+/// How far a page starts below where it settles.
+const PAGE_RISE: f32 = 12.0;
+/// Long enough to read as a move, short enough that navigation stays instant.
+const PAGE_ARRIVAL: f32 = 0.22;
+
+/// Zero the moment a page is opened, one once it has arrived. Pages are drawn
+/// one at a time here, so the one leaving is gone before this runs: the page
+/// coming in rises into place and lights up on its own, which is the part of a
+/// push the eye actually follows.
+fn page_arrival(ctx: &egui::Context, page: &Page) -> f32 {
+    let id = egui::Id::new("page-arrival");
+    let key = page.encode();
+    let (mut showing, mut t, pass): (String, f32, u64) =
+        ctx.data(|data| data.get_temp(id)).unwrap_or_default();
+    let now = ctx.cumulative_pass_nr();
+    if pass == now {
+        return theme::motion::Curve::EaseOut.apply(t);
+    }
+    if showing != key {
+        showing = key;
+        t = 0.0;
+    }
+    if theme::motion::reduced(ctx) {
+        t = 1.0;
+    } else if t < 1.0 {
+        let dt = ctx.input(|input| input.stable_dt).clamp(0.0, 0.1);
+        t = (t + dt / PAGE_ARRIVAL).min(1.0);
+        ctx.request_repaint();
+    }
+    ctx.data_mut(|data| data.insert_temp(id, (showing, t, now)));
+    theme::motion::Curve::EaseOut.apply(t)
+}
+
 fn central(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let tint = page_tint(app);
@@ -125,6 +205,7 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
             topbar::show(app, ui);
             let page = app.page().clone();
+            let arriving = page_arrival(ui.ctx(), &page);
             egui::ScrollArea::vertical()
                 .id_salt(("page", page.encode()))
                 .auto_shrink([false, false])
@@ -133,10 +214,11 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                         .inner_margin(Margin {
                             left: widgets::PAGE_PADDING as i8,
                             right: widgets::PAGE_PADDING as i8,
-                            top: 4,
+                            top: 4 + (PAGE_RISE * (1.0 - arriving)) as i8,
                             bottom: 48,
                         })
                         .show(ui, |ui| {
+                            ui.multiply_opacity(arriving);
                             ui.set_min_width(ui.available_width());
                             match page {
                                 Page::Home => home::show(app, ui),
@@ -379,10 +461,10 @@ fn toasts(app: &mut App, ctx: &egui::Context, bottom_offset: f32) {
             ui.spacing_mut().item_spacing.y = 8.0;
             for toast in &app.toasts {
                 let age = toast.created.elapsed().as_secs_f32();
-                let alpha = if age < 0.15 {
-                    age / 0.15
+                let alpha = if age < 0.18 {
+                    theme::motion::Curve::EaseOut.apply(age / 0.18)
                 } else if age > 2.8 {
-                    ((3.2 - age) / 0.4).clamp(0.0, 1.0)
+                    theme::motion::Curve::EaseIn.apply(((3.2 - age) / 0.4).clamp(0.0, 1.0))
                 } else {
                     1.0
                 };

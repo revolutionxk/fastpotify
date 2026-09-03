@@ -4,6 +4,8 @@
 //! All colors use [`Palette`] so light, dark, and album-art-tinted themes stay
 //! consistent.
 
+pub mod motion;
+
 use egui::{Color32, CornerRadius, Response, Sense, Stroke, Vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -558,17 +560,20 @@ pub fn icon_button(
     let edge = size + 12.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(edge), Sense::click());
     if ui.is_rect_visible(rect) {
-        let tint = if response.hovered() || response.has_focus() {
-            hover
-        } else {
-            color
-        };
-        let scale = if response.is_pointer_button_down_on() {
-            0.92
-        } else {
-            1.0
-        };
-        paint_icon(ui, icon, rect, size * scale, tint);
+        let lit = motion::toggle(
+            ui,
+            response.id.with("lit"),
+            response.hovered() || response.has_focus(),
+            motion::HOVER,
+        );
+        let press = motion::toggle(
+            ui,
+            response.id.with("press"),
+            response.is_pointer_button_down_on(),
+            motion::SNAPPY,
+        );
+        let tint = motion::mix(color, hover, lit);
+        paint_icon(ui, icon, rect, size * (1.0 - 0.08 * press), tint);
     }
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if tooltip.is_empty() {
@@ -576,6 +581,10 @@ pub fn icon_button(
     } else {
         response.on_hover_text(tooltip)
     }
+}
+
+pub fn shrink_about_center(rect: egui::Rect, scale: f32) -> egui::Rect {
+    egui::Rect::from_center_size(rect.center(), rect.size() * scale)
 }
 
 /// Horizontal offset that optically centers play triangles.
@@ -615,10 +624,20 @@ pub fn circle_button(
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::click());
     if ui.is_rect_visible(rect) {
-        let hovered = response.hovered();
-        let grow = if hovered { 1.05 } else { 1.0 };
-        let radius = diameter / 2.0 * grow;
-        let fill = if hovered { fill_hover } else { fill };
+        let lit = motion::toggle(
+            ui,
+            response.id.with("lit"),
+            response.hovered(),
+            motion::HOVER,
+        );
+        let press = motion::toggle(
+            ui,
+            response.id.with("press"),
+            response.is_pointer_button_down_on(),
+            motion::SNAPPY,
+        );
+        let radius = diameter / 2.0 * (1.0 + 0.05 * lit - 0.07 * press);
+        let fill = motion::mix(fill, fill_hover, lit);
         ui.painter().circle_filled(rect.center(), radius, fill);
         let icon_size = diameter * 0.46;
         let offset = play_glyph_offset(icon, icon_size);
@@ -672,17 +691,25 @@ pub fn pill_button(ui: &mut egui::Ui, palette: &Palette, label: &str, primary: b
     let size = galley.size() + padding * 2.0;
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
-        let hovered = response.hovered();
+        let lit = motion::toggle(
+            ui,
+            response.id.with("lit"),
+            response.hovered(),
+            motion::HOVER,
+        );
+        let press = motion::toggle(
+            ui,
+            response.id.with("press"),
+            response.is_pointer_button_down_on(),
+            motion::SNAPPY,
+        );
+        let rect = shrink_about_center(rect, 1.0 - 0.03 * press);
         let radius = rect.height() / 2.0;
         if primary {
-            let fill = if hovered {
-                palette.accent_hover
-            } else {
-                palette.accent
-            };
+            let fill = motion::mix(palette.accent, palette.accent_hover, lit);
             ui.painter().rect_filled(rect, radius, fill);
         } else {
-            let stroke_color = if hovered { palette.text } else { palette.dim };
+            let stroke_color = motion::mix(palette.dim, palette.text, lit);
             ui.painter().rect_stroke(
                 rect,
                 radius,
@@ -715,13 +742,16 @@ pub fn soft_button(
     let size = Vec2::new(galley.size().x + icon_width, galley.size().y) + padding * 2.0;
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
-        let hovered = response.hovered();
+        let lit = motion::toggle(
+            ui,
+            response.id.with("lit"),
+            response.hovered(),
+            motion::HOVER,
+        );
         let fill = if active {
             palette.text
-        } else if hovered {
-            palette.surface_hover
         } else {
-            palette.surface
+            motion::mix(palette.surface, palette.surface_hover, lit)
         };
         ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
         let mut x = rect.left() + padding.x;

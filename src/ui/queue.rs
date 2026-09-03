@@ -27,79 +27,107 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
 }
 
 pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
+    let reveal = super::reveal(ui, "show_queue_panel", app.show_queue_panel);
+    if reveal <= 0.0 {
+        return;
+    }
     let palette = app.palette;
-    let panel = egui::Panel::right("queue-panel")
-        .resizable(true)
-        .default_size(app.settings.queue_width)
-        .size_range(theme::SIDE_PANEL_MIN_WIDTH..=560.0)
+    let sliding = reveal < 1.0;
+    let mut panel = egui::Panel::right("queue-panel")
         .show_separator_line(false)
         .frame(
             Frame::new()
                 .fill(palette.panel)
                 .inner_margin(Margin::symmetric(12, 12)),
         );
+    panel = if sliding {
+        panel
+            .resizable(false)
+            .exact_size(super::revealed_width(app.settings.queue_width, reveal))
+    } else {
+        panel
+            .resizable(true)
+            .default_size(app.settings.queue_width)
+            .size_range(theme::SIDE_PANEL_MIN_WIDTH..=560.0)
+    };
+    let full_inner = if sliding {
+        (app.settings.queue_width - 24.0).max(1.0)
+    } else {
+        0.0
+    };
     let response = panel.show(ui, |ui| {
-        let window_controls = super::window_controls_reservation(
-            ui.ctx(),
-            app.show_queue_panel,
-            app.show_lyrics_panel,
-            ui.available_width(),
-        );
-        ui.add_space(window_controls.queue_top);
-        // Measure buttons first and give the remaining width to the chips.
-        // Without `shrink_left`, wrapped chips can overlap the close button.
-        let tab = app.queue_tab;
-        let offer_save = tab == QueueTab::Queue && !app.queue_playlist_uris().is_empty();
-        let mut picked = None;
-        let mut close = false;
-        let mut save = false;
-        egui::Sides::new().shrink_left().show(
-            ui,
-            |ui| {
-                ui.add_space(4.0);
-                picked = widgets::chips(
-                    ui,
-                    &palette,
-                    &[(QueueTab::Queue, "Queue"), (QueueTab::Recents, "Recent")],
-                    tab,
-                );
-            },
-            |ui| {
-                close =
-                    theme::icon_button(ui, Icon::X, 18.0, palette.secondary, palette.text, "Close")
-                        .clicked();
-                save = save_button(ui, &palette, offer_save);
-            },
-        );
-        if let Some(tab) = picked {
-            app.actions.push(Action::SetQueueTab(tab));
+        if sliding {
+            ui.multiply_opacity(super::revealed_opacity(reveal));
         }
-        if close {
-            app.actions.push(Action::ToggleQueuePanel);
-        }
-        if save {
-            app.actions.push(Action::SaveQueueAsPlaylist);
-        }
-        ui.add_space(8.0);
-        // Lazy load recents when tab becomes visible.
-        if app.queue_tab == QueueTab::Recents
-            && !app.recents.loading
-            && !app.recents.complete
-            && app.recents.items.is_empty()
-            && app.recents.error.is_none()
-        {
-            app.actions.push(Action::LoadMoreRecents);
-        }
-        egui::ScrollArea::vertical()
-            .id_salt("queue-panel-scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| match app.queue_tab {
-                QueueTab::Queue => contents(app, ui, true),
-                QueueTab::Recents => recents_contents(app, ui),
-            });
+        super::slid(ui, full_inner, false, |ui| {
+            let window_controls = super::window_controls_reservation(
+                ui.ctx(),
+                app.show_queue_panel,
+                app.show_lyrics_panel,
+                ui.available_width(),
+            );
+            ui.add_space(window_controls.queue_top);
+            // Measure buttons first and give the remaining width to the chips.
+            // Without `shrink_left`, wrapped chips can overlap the close button.
+            let tab = app.queue_tab;
+            let offer_save = tab == QueueTab::Queue && !app.queue_playlist_uris().is_empty();
+            let mut picked = None;
+            let mut close = false;
+            let mut save = false;
+            egui::Sides::new().shrink_left().show(
+                ui,
+                |ui| {
+                    ui.add_space(4.0);
+                    picked = widgets::chips(
+                        ui,
+                        &palette,
+                        &[(QueueTab::Queue, "Queue"), (QueueTab::Recents, "Recent")],
+                        tab,
+                    );
+                },
+                |ui| {
+                    close = theme::icon_button(
+                        ui,
+                        Icon::X,
+                        18.0,
+                        palette.secondary,
+                        palette.text,
+                        "Close",
+                    )
+                    .clicked();
+                    save = save_button(ui, &palette, offer_save);
+                },
+            );
+            if let Some(tab) = picked {
+                app.actions.push(Action::SetQueueTab(tab));
+            }
+            if close {
+                app.actions.push(Action::ToggleQueuePanel);
+            }
+            if save {
+                app.actions.push(Action::SaveQueueAsPlaylist);
+            }
+            ui.add_space(8.0);
+            // Lazy load recents when tab becomes visible.
+            if app.queue_tab == QueueTab::Recents
+                && !app.recents.loading
+                && !app.recents.complete
+                && app.recents.items.is_empty()
+                && app.recents.error.is_none()
+            {
+                app.actions.push(Action::LoadMoreRecents);
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("queue-panel-scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| match app.queue_tab {
+                    QueueTab::Queue => contents(app, ui, true),
+                    QueueTab::Recents => recents_contents(app, ui),
+                });
+        });
     });
     let width = response.response.rect.width();
-    if (width - app.settings.queue_width).abs() > 1.0 {
+    if !sliding && (width - app.settings.queue_width).abs() > 1.0 {
         app.settings.queue_width = width;
         app.actions.push(Action::SettingsChanged);
     }

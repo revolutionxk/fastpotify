@@ -94,13 +94,14 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
         return;
     };
 
-    super::widgets::paint_cover(
+    super::widgets::paint_cover_crossfade(
         ui,
         &palette,
         now.art_small.as_deref().or(now.art_url.as_deref()),
         cover_rect,
         6.0,
         Icon::Music,
+        egui::Id::new("now-playing-art"),
     );
     let song = app.now_playing_item();
     let drag_sense = if song.is_some() {

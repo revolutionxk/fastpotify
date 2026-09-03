@@ -1065,9 +1065,6 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let mut output = ctx.run_ui(input, |ui| app.frame_ui(ui));
-            output.textures_delta.clear();
-            let mut said = Vec::new();
             fn walk(shape: &egui::epaint::Shape, said: &mut Vec<String>) {
                 match shape {
                     egui::epaint::Shape::Text(text) => said.push(text.galley.job.text.clone()),
@@ -1077,8 +1074,24 @@ mod tests {
                     _ => {}
                 }
             }
-            for clipped in &output.shapes {
-                walk(&clipped.shape, &mut said);
+            // An opened page arrives over a few frames and is not there to be
+            // read on the first of them. Run until nothing is asking to be
+            // repainted promptly, so the labels are the ones at rest.
+            let mut said = Vec::new();
+            for _ in 0..120 {
+                said.clear();
+                let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+                output.textures_delta.clear();
+                for clipped in &output.shapes {
+                    walk(&clipped.shape, &mut said);
+                }
+                let settled = output
+                    .viewport_output
+                    .values()
+                    .all(|viewport| viewport.repaint_delay > std::time::Duration::from_millis(100));
+                if settled {
+                    break;
+                }
             }
             said
         };
@@ -1145,30 +1158,39 @@ mod tests {
             )),
             ..Default::default()
         };
-        let drawn = |app: &mut App| {
-            let mut placed = Vec::new();
-            // A panel applies its requested width after the first frame.
-            for _ in 0..2 {
-                placed.clear();
-                let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
-                output.textures_delta.clear();
-                fn walk(shape: &egui::epaint::Shape, placed: &mut Vec<(String, egui::Rect)>) {
-                    match shape {
-                        egui::epaint::Shape::Text(text) => {
-                            placed.push((text.galley.job.text.clone(), text.visual_bounding_rect()))
+        let drawn =
+            |app: &mut App| {
+                let mut placed = Vec::new();
+                // A panel applies its requested width after the first frame and
+                // slides the rest of the way over the frames after that. Run until
+                // nothing is asking to be repainted promptly, so the assertions
+                // below see the interface at rest rather than part way in.
+                for _ in 0..120 {
+                    placed.clear();
+                    let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+                    output.textures_delta.clear();
+                    fn walk(shape: &egui::epaint::Shape, placed: &mut Vec<(String, egui::Rect)>) {
+                        match shape {
+                            egui::epaint::Shape::Text(text) => placed
+                                .push((text.galley.job.text.clone(), text.visual_bounding_rect())),
+                            egui::epaint::Shape::Vec(shapes) => {
+                                shapes.iter().for_each(|shape| walk(shape, placed))
+                            }
+                            _ => {}
                         }
-                        egui::epaint::Shape::Vec(shapes) => {
-                            shapes.iter().for_each(|shape| walk(shape, placed))
-                        }
-                        _ => {}
+                    }
+                    for clipped in &output.shapes {
+                        walk(&clipped.shape, &mut placed);
+                    }
+                    let settled = output.viewport_output.values().all(|viewport| {
+                        viewport.repaint_delay > std::time::Duration::from_millis(100)
+                    });
+                    if settled {
+                        break;
                     }
                 }
-                for clipped in &output.shapes {
-                    walk(&clipped.shape, &mut placed);
-                }
-            }
-            placed
-        };
+                placed
+            };
         let assert_same_row = |placed: &[(String, egui::Rect)], left: &str, right: &str| {
             let at = |label: &str| {
                 placed

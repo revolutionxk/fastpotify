@@ -7,7 +7,7 @@ use egui::{
 use crate::api::models::*;
 use crate::app::App;
 use crate::model::{Action, Dialog, DragEntry, DragTrack, Page, RowContext, RowPick};
-use crate::theme::{self, Icon, Palette};
+use crate::theme::{self, Icon, Palette, motion};
 use crate::util;
 
 pub const CARD_WIDTH: f32 = 172.0;
@@ -36,11 +36,89 @@ pub fn paint_cover(
     radius: f32,
     fallback: Icon,
 ) {
+    paint_cover_at(ui, palette, url, rect, radius, Some(fallback), 1.0);
+}
+
+#[derive(Clone, Default)]
+struct Crossfade {
+    pass: u64,
+    showing: Option<String>,
+    leaving: Option<String>,
+    t: f32,
+}
+
+/// A cover that dissolves into the next one instead of cutting to it. Holds
+/// the old art until the new art has actually decoded, so nothing flashes the
+/// placeholder in between. One slot of state per `id`, so it suits the few
+/// places a cover is large enough for the cut to show.
+pub fn paint_cover_crossfade(
+    ui: &Ui,
+    palette: &Palette,
+    url: Option<&str>,
+    rect: Rect,
+    radius: f32,
+    fallback: Icon,
+    id: egui::Id,
+) {
+    const SECONDS: f32 = 0.28;
     if !ui.is_rect_visible(rect) {
         return;
     }
+    let ctx = ui.ctx();
+    let mut fade: Crossfade = ctx.data(|data| data.get_temp(id)).unwrap_or_default();
+    let url = url.map(str::to_string);
+    let pass = ctx.cumulative_pass_nr();
+    let stepping = fade.pass != pass;
+    fade.pass = pass;
+    if stepping && fade.showing != url {
+        fade.leaving = fade.showing.take().or(fade.leaving.take());
+        fade.showing = url.clone();
+        fade.t = 0.0;
+    }
+    let arrived = paint_cover_at(ui, palette, url.as_deref(), rect, radius, None, 0.0);
+    let instant = motion::reduced(ctx);
+    if stepping && arrived {
+        let dt = ctx.input(|input| input.stable_dt).clamp(0.0, 0.1);
+        fade.t = if instant {
+            1.0
+        } else {
+            (fade.t + dt / SECONDS).min(1.0)
+        };
+    }
+    let t = motion::Curve::EaseInOut.apply(fade.t);
+    if t < 1.0
+        && let Some(leaving) = fade.leaving.clone()
+    {
+        paint_cover_at(ui, palette, Some(&leaving), rect, radius, None, 1.0);
+    }
+    if !arrived && fade.leaving.is_none() {
+        paint_cover_at(ui, palette, None, rect, radius, Some(fallback), 1.0);
+    } else if t > 0.0 {
+        paint_cover_at(ui, palette, url.as_deref(), rect, radius, Some(fallback), t);
+    }
+    if fade.t >= 1.0 {
+        fade.leaving = None;
+    } else if arrived {
+        ctx.request_repaint();
+    }
+    ctx.data_mut(|data| data.insert_temp(id, fade));
+}
+
+fn paint_cover_at(
+    ui: &Ui,
+    palette: &Palette,
+    url: Option<&str>,
+    rect: Rect,
+    radius: f32,
+    fallback: Option<Icon>,
+    alpha: f32,
+) -> bool {
+    if !ui.is_rect_visible(rect) {
+        return false;
+    }
     let corner = CornerRadius::same(radius.min(127.0) as u8);
     let painter = ui.painter();
+    let tint = Color32::WHITE.gamma_multiply(alpha);
     let loaded = url.is_some_and(|url| {
         let image = egui::Image::new(url).show_loading_spinner(false);
         let Ok(egui::load::TexturePoll::Ready { texture }) =
@@ -60,26 +138,40 @@ pub fn paint_cover(
             let inset = (1.0 - visible_height) / 2.0;
             Rect::from_min_max(pos2(0.0, inset), pos2(1.0, 1.0 - inset))
         };
-        egui::Image::new(texture)
-            .uv(uv)
-            .corner_radius(corner)
-            .paint_at(ui, rect);
+        if alpha > 0.004 {
+            egui::Image::new(texture)
+                .uv(uv)
+                .corner_radius(corner)
+                .tint(tint)
+                .paint_at(ui, rect);
+        }
         true
     });
-    if !loaded {
+    if let Some(fallback) = fallback
+        && !loaded
+        && alpha > 0.004
+    {
         let fill = if palette.dark {
             palette.surface_hover
         } else {
             palette.surface_active
-        };
+        }
+        .gamma_multiply(alpha);
         if radius >= rect.width() / 2.0 - 0.5 {
             painter.circle_filled(rect.center(), rect.width() / 2.0, fill);
         } else {
             painter.rect_filled(rect, corner, fill);
         }
         let icon_size = (rect.width() * 0.42).clamp(12.0, 64.0);
-        theme::paint_icon(ui, fallback, rect, icon_size, palette.dim);
+        theme::paint_icon(
+            ui,
+            fallback,
+            rect,
+            icon_size,
+            palette.dim.gamma_multiply(alpha),
+        );
     }
+    loaded
 }
 
 /// A soft drop shadow under a cover or card.
@@ -676,25 +768,30 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
         PlayableItem::Episode(_) => false,
     };
 
-    if row.picked {
-        // Picked rows read as a block, so a run of them looks like one
-        // thing rather than a stack of hovers. Hovering one still lifts
-        // it, so the pointer is never lost inside the block.
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(6),
-            palette
-                .accent
-                .gamma_multiply(if hovered { 0.30 } else { 0.20 }),
-        );
-    } else if hovered {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(6),
+    let scope = ui.id().with("row-hover");
+    if hovered {
+        motion::mark(ui.ctx(), scope, response.id);
+    }
+    let lit = motion::trail(ui.ctx(), scope, motion::HOVER).amount(response.id);
+    // Picked rows read as a block, so a run of them looks like one thing
+    // rather than a stack of hovers. Hovering one still lifts it, so the
+    // pointer is never lost inside the block.
+    let (resting, raised) = if row.picked {
+        (
+            palette.accent.gamma_multiply(0.20),
+            palette.accent.gamma_multiply(0.30),
+        )
+    } else {
+        (
+            Color32::TRANSPARENT,
             palette
                 .surface_hover
                 .gamma_multiply(if palette.dark { 0.7 } else { 1.0 }),
-        );
+        )
+    };
+    let fill = motion::mix(resting, raised, lit);
+    if fill.a() > 0 {
+        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
     }
     let cols = columns(width, &row);
     let painter = ui.painter().clone();
@@ -710,29 +807,48 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
                     .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
             );
             theme::spinner(&mut child, 16.0, palette.accent);
-        } else if hovered && !unavailable {
-            let icon = if playing {
-                Icon::PauseFilled
-            } else {
-                Icon::PlayFilled
-            };
-            theme::paint_icon(ui, icon, cell, 14.0, palette.text);
-        } else if playing {
-            theme::paint_icon(ui, Icon::AudioLines, cell, 16.0, palette.accent);
         } else {
-            let color = if is_current {
-                palette.accent
-            } else {
-                palette.secondary
-            };
-            let label = row.number.unwrap_or(row.index + 1).to_string();
-            painter.text(
-                cell.center(),
-                egui::Align2::CENTER_CENTER,
-                label,
-                theme::regular(14.0),
-                color,
-            );
+            let shown = if unavailable { 0.0 } else { lit };
+            let resting = 1.0 - shown;
+            if resting > 0.004 {
+                if playing {
+                    theme::paint_icon(
+                        ui,
+                        Icon::AudioLines,
+                        cell,
+                        16.0,
+                        palette.accent.gamma_multiply(resting),
+                    );
+                } else {
+                    let color = if is_current {
+                        palette.accent
+                    } else {
+                        palette.secondary
+                    };
+                    let label = row.number.unwrap_or(row.index + 1).to_string();
+                    painter.text(
+                        cell.center(),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        theme::regular(14.0),
+                        color.gamma_multiply(resting),
+                    );
+                }
+            }
+            if shown > 0.004 {
+                let icon = if playing {
+                    Icon::PauseFilled
+                } else {
+                    Icon::PlayFilled
+                };
+                theme::paint_icon(
+                    ui,
+                    icon,
+                    cell,
+                    14.0 * (0.9 + 0.1 * shown),
+                    palette.text.gamma_multiply(shown),
+                );
+            }
         }
         x += cols.number;
     }
@@ -773,17 +889,40 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
                         .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
                 );
                 theme::spinner(&mut child, 16.0, Color32::WHITE);
-            } else if hovered && !unavailable {
-                scrim(140);
-                let icon = if playing {
-                    Icon::PauseFilled
+            } else {
+                let shown = if unavailable { 0.0 } else { lit };
+                let resting = 1.0 - shown;
+                let veil = if playing {
+                    110.0 + 30.0 * shown
                 } else {
-                    Icon::PlayFilled
+                    140.0 * shown
                 };
-                theme::paint_icon(ui, icon, cover_rect, 16.0, Color32::WHITE);
-            } else if playing {
-                scrim(110);
-                theme::paint_icon(ui, Icon::AudioLines, cover_rect, 16.0, palette.accent);
+                if veil >= 1.0 {
+                    scrim(veil as u8);
+                }
+                if playing && resting > 0.004 {
+                    theme::paint_icon(
+                        ui,
+                        Icon::AudioLines,
+                        cover_rect,
+                        16.0,
+                        palette.accent.gamma_multiply(resting),
+                    );
+                }
+                if shown > 0.004 {
+                    let icon = if playing {
+                        Icon::PauseFilled
+                    } else {
+                        Icon::PlayFilled
+                    };
+                    theme::paint_icon(
+                        ui,
+                        icon,
+                        cover_rect,
+                        16.0 * (0.9 + 0.1 * shown),
+                        Color32::WHITE.gamma_multiply(shown),
+                    );
+                }
             }
         }
         x += cols.cover;
@@ -1502,13 +1641,18 @@ pub fn card(
     let mut play = false;
     if ui.is_rect_visible(rect) {
         let hovered = ui.rect_contains_pointer(rect);
+        let scope = ui.id().with("card-hover");
         if hovered {
+            motion::mark(ui.ctx(), scope, response.id);
+        }
+        let lit = motion::trail(ui.ctx(), scope, motion::HOVER).amount(response.id);
+        if lit > 0.004 {
             ui.painter().rect_filled(
                 rect,
                 CornerRadius::same(theme::RADIUS),
                 palette
                     .surface_hover
-                    .gamma_multiply(if palette.dark { 0.8 } else { 1.0 }),
+                    .gamma_multiply(if palette.dark { 0.8 } else { 1.0 } * lit),
             );
         }
         let image_rect = Rect::from_min_size(rect.min + vec2(PAD, PAD), Vec2::splat(image_size));
@@ -1554,9 +1698,13 @@ pub fn card(
         ui.painter()
             .galley(subtitle_pos, subtitle_galley, palette.secondary);
 
-        if playable && hovered {
+        if playable && lit > 0.004 {
+            // Spotify's card disc rises into place rather than appearing.
             let button_rect = Rect::from_center_size(
-                pos2(image_rect.right() - 26.0, image_rect.bottom() - 26.0),
+                pos2(
+                    image_rect.right() - 26.0,
+                    image_rect.bottom() - 26.0 + 10.0 * (1.0 - lit),
+                ),
                 Vec2::splat(44.0),
             );
             let mut child = ui.new_child(
@@ -1564,6 +1712,7 @@ pub fn card(
                     .max_rect(button_rect)
                     .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
             );
+            child.multiply_opacity(lit);
             play = theme::circle_button(
                 &mut child,
                 Icon::PlayFilled,
@@ -1732,22 +1881,28 @@ pub fn thin_slider(
     };
     if ui.is_rect_visible(rect) {
         let active = response.hovered() || response.dragged() || dragging_value.is_some();
-        let bar = Rect::from_center_size(rect.center(), vec2(rect.width(), 4.0));
+        let lit = motion::toggle(ui, id.with("lit"), active, motion::HOVER);
+        let thickness = 4.0 + 2.0 * lit;
+        let bar = Rect::from_center_size(rect.center(), vec2(rect.width(), thickness));
         let track_color = if palette.dark {
             Color32::from_white_alpha(50)
         } else {
             Color32::from_black_alpha(40)
         };
-        ui.painter().rect_filled(bar, 2.0, track_color);
+        let radius = thickness / 2.0;
+        ui.painter().rect_filled(bar, radius, track_color);
         let filled = Rect::from_min_max(
             bar.min,
             pos2(bar.left() + bar.width() * shown.clamp(0.0, 1.0), bar.max.y),
         );
-        let fill = if active { accent } else { palette.text };
-        ui.painter().rect_filled(filled, 2.0, fill);
-        if active {
-            ui.painter()
-                .circle_filled(pos2(filled.right(), bar.center().y), 6.0, palette.text);
+        ui.painter()
+            .rect_filled(filled, radius, motion::mix(palette.text, accent, lit));
+        if lit > 0.004 {
+            ui.painter().circle_filled(
+                pos2(filled.right(), bar.center().y),
+                6.0 * lit,
+                palette.text,
+            );
         }
     }
     event
@@ -1871,7 +2026,7 @@ pub fn switch(ui: &mut Ui, palette: &Palette, on: &mut bool) -> egui::Response {
         response.mark_changed();
     }
     if ui.is_rect_visible(rect) {
-        let t = ui.ctx().animate_bool(response.id, *on);
+        let t = motion::toggle(ui, response.id, *on, motion::SNAPPY);
         let fill = egui::lerp(
             egui::Rgba::from(palette.surface_active)..=egui::Rgba::from(palette.accent),
             t,

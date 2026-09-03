@@ -5,7 +5,7 @@ use egui::{Align, CornerRadius, Frame, Layout, Margin, Rect, Sense, Vec2, pos2, 
 use crate::api::models::pick_image;
 use crate::app::App;
 use crate::model::{Action, Dialog, DragEntry, DragTrack, Loadable, Page};
-use crate::theme::{self, Icon, Palette};
+use crate::theme::{self, Icon, Palette, motion};
 
 const DEFAULT_ROW_HEIGHT: f32 = 60.0;
 const COMPACT_ROW_HEIGHT: f32 = 32.0;
@@ -40,14 +40,16 @@ struct Entry {
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
+    let reveal = super::reveal(ui, "sidebar", app.settings.sidebar_visible);
+    if reveal <= 0.0 {
+        return;
+    }
     let palette = app.palette;
     // The traffic lights float over the top-left of the sidebar now, so the
     // first nav row has to start below them.
     let top = 12 + theme::titlebar_inset(ui.ctx()) as i8;
-    let panel = egui::Panel::left("sidebar")
-        .resizable(true)
-        .default_size(app.settings.sidebar_width)
-        .size_range(210.0..=440.0)
+    let sliding = reveal < 1.0;
+    let mut panel = egui::Panel::left("sidebar")
         .show_separator_line(false)
         .frame(Frame::new().fill(palette.panel).inner_margin(Margin {
             left: 12,
@@ -55,12 +57,32 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             top,
             bottom: 8,
         }));
+    panel = if sliding {
+        panel
+            .resizable(false)
+            .exact_size(super::revealed_width(app.settings.sidebar_width, reveal))
+    } else {
+        panel
+            .resizable(true)
+            .default_size(app.settings.sidebar_width)
+            .size_range(210.0..=440.0)
+    };
+    let full_inner = if sliding {
+        (app.settings.sidebar_width - 20.0).max(1.0)
+    } else {
+        0.0
+    };
     let response = panel.show(ui, |ui| {
-        art_panel(app, ui);
-        contents(app, ui);
+        if sliding {
+            ui.multiply_opacity(super::revealed_opacity(reveal));
+        }
+        super::slid(ui, full_inner, true, |ui| {
+            art_panel(app, ui);
+            contents(app, ui);
+        });
     });
     let width = response.response.rect.width();
-    if (width - app.settings.sidebar_width).abs() > 1.0 {
+    if !sliding && (width - app.settings.sidebar_width).abs() > 1.0 {
         app.settings.sidebar_width = width;
         app.actions.push(Action::SettingsChanged);
     }
@@ -92,7 +114,15 @@ fn art_panel(app: &mut App, ui: &mut egui::Ui) {
                 ui.max_rect().left_top(),
                 Vec2::splat(side.min(ui.available_width())),
             );
-            super::widgets::paint_cover(ui, &palette, Some(&url), rect, 8.0, Icon::Music);
+            super::widgets::paint_cover_crossfade(
+                ui,
+                &palette,
+                Some(&url),
+                rect,
+                8.0,
+                Icon::Music,
+                egui::Id::new("sidebar-art-cover"),
+            );
             let art = ui
                 .interact(rect, egui::Id::new("sidebar-art"), Sense::click())
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -282,11 +312,13 @@ fn nav_row(
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
     if ui.is_rect_visible(rect) {
-        let color = if active || response.hovered() {
-            palette.text
-        } else {
-            palette.secondary
-        };
+        let lit = motion::toggle(
+            ui,
+            response.id.with("lit"),
+            active || response.hovered(),
+            motion::HOVER,
+        );
+        let color = motion::mix(palette.secondary, palette.text, lit);
         let icon_rect =
             Rect::from_center_size(pos2(rect.left() + 22.0, rect.center().y), Vec2::splat(22.0));
         icon.image(color, 22.0).paint_at(ui, icon_rect);
@@ -752,15 +784,22 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 );
                 let rect = rect.translate(vec2(0.0, shift));
                 if ui.is_rect_visible(rect) {
-                    if active {
-                        ui.painter()
-                            .rect_filled(rect, CornerRadius::same(6), palette.surface);
-                    } else if response.hovered() {
-                        ui.painter().rect_filled(
-                            rect,
-                            CornerRadius::same(6),
+                    let scope = ui.id().with("playlist-hover");
+                    if response.hovered() {
+                        motion::mark(ui.ctx(), scope, response.id);
+                    }
+                    let lit = motion::trail(ui.ctx(), scope, motion::HOVER).amount(response.id);
+                    let fill = if active {
+                        palette.surface
+                    } else {
+                        motion::mix(
+                            egui::Color32::TRANSPARENT,
                             palette.surface_hover.gamma_multiply(0.6),
-                        );
+                            lit,
+                        )
+                    };
+                    if fill.a() > 0 {
+                        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
                     }
                     if drop_hover {
                         ui.painter().rect_filled(

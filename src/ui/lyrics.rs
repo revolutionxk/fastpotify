@@ -19,46 +19,75 @@ fn blend(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
 }
 
 pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
+    let reveal = super::reveal(ui, "show_lyrics_panel", app.show_lyrics_panel);
+    if reveal <= 0.0 {
+        return;
+    }
     let palette = app.palette;
-    let panel = egui::Panel::right("lyrics-panel")
-        .resizable(true)
-        .default_size(app.settings.lyrics_width)
-        .size_range(theme::SIDE_PANEL_MIN_WIDTH..=640.0)
+    let sliding = reveal < 1.0;
+    let mut panel = egui::Panel::right("lyrics-panel")
         .show_separator_line(false)
         .frame(
             Frame::new()
                 .fill(palette.panel)
                 .inner_margin(Margin::symmetric(12, 12)),
         );
+    panel = if sliding {
+        panel
+            .resizable(false)
+            .exact_size(super::revealed_width(app.settings.lyrics_width, reveal))
+    } else {
+        panel
+            .resizable(true)
+            .default_size(app.settings.lyrics_width)
+            .size_range(theme::SIDE_PANEL_MIN_WIDTH..=640.0)
+    };
+    let full_inner = if sliding {
+        (app.settings.lyrics_width - 24.0).max(1.0)
+    } else {
+        0.0
+    };
     let response = panel.show(ui, |ui| {
-        let window_controls = super::window_controls_reservation(
-            ui.ctx(),
-            app.show_queue_panel,
-            app.show_lyrics_panel,
-            ui.available_width(),
-        );
-        ui.add_space(window_controls.lyrics_top);
-        ui.horizontal(|ui| {
-            ui.add_space(4.0);
-            theme::text(ui, "Lyrics", theme::bold(18.0), palette.text);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if theme::icon_button(ui, Icon::X, 18.0, palette.secondary, palette.text, "Close")
+        if sliding {
+            ui.multiply_opacity(super::revealed_opacity(reveal));
+        }
+        super::slid(ui, full_inner, false, |ui| {
+            let window_controls = super::window_controls_reservation(
+                ui.ctx(),
+                app.show_queue_panel,
+                app.show_lyrics_panel,
+                ui.available_width(),
+            );
+            ui.add_space(window_controls.lyrics_top);
+            ui.horizontal(|ui| {
+                ui.add_space(4.0);
+                theme::text(ui, "Lyrics", theme::bold(18.0), palette.text);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if theme::icon_button(
+                        ui,
+                        Icon::X,
+                        18.0,
+                        palette.secondary,
+                        palette.text,
+                        "Close",
+                    )
                     .clicked()
-                {
-                    app.actions.push(Action::ToggleLyricsPanel);
-                }
-                let loaded = matches!(&app.lyrics, Loadable::Loaded(Some(_)));
-                if loaded
-                    && !app.lyrics_following
-                    && theme::pill_button(ui, &palette, "Follow", false).clicked()
-                {
-                    app.lyrics_following = true;
-                    app.lyrics_line_shown = None;
-                }
+                    {
+                        app.actions.push(Action::ToggleLyricsPanel);
+                    }
+                    let loaded = matches!(&app.lyrics, Loadable::Loaded(Some(_)));
+                    if loaded
+                        && !app.lyrics_following
+                        && theme::pill_button(ui, &palette, "Follow", false).clicked()
+                    {
+                        app.lyrics_following = true;
+                        app.lyrics_line_shown = None;
+                    }
+                });
             });
+            ui.add_space(8.0);
+            contents(app, ui);
         });
-        ui.add_space(8.0);
-        contents(app, ui);
     });
     let current_width = response.response.rect.width();
     if (app.settings.lyrics_width - current_width).abs() > 1.0 {
