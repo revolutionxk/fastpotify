@@ -5,6 +5,7 @@
 //! consistent.
 
 pub mod motion;
+pub mod spark;
 
 use egui::{Color32, CornerRadius, Response, Sense, Stroke, Vec2};
 
@@ -692,6 +693,67 @@ pub fn shrink_about_center(rect: egui::Rect, scale: f32) -> egui::Rect {
     egui::Rect::from_center_size(rect.center(), rect.size() * scale)
 }
 
+/// The Liked Songs control. Liking is the one action in the interface worth
+/// marking, so it is: the heart swells, fills, and throws a short burst of
+/// particles (`spark`). Unliking just goes back, with nothing thrown, which is
+/// what every application that does this gets right.
+pub fn heart_button(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    saved: bool,
+    size: f32,
+    tooltip: &str,
+) -> Response {
+    let edge = size + 12.0;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(edge), Sense::click());
+    if response.clicked() && !saved {
+        spark::burst(ui.ctx(), response.id, rect.center(), palette.accent);
+    }
+    if ui.is_rect_visible(rect) {
+        let lit = motion::toggle(
+            ui,
+            response.id.with("lit"),
+            response.hovered() || response.has_focus(),
+            motion::HOVER,
+        );
+        let press = motion::toggle(
+            ui,
+            response.id.with("press"),
+            response.is_pointer_button_down_on(),
+            motion::SNAPPY,
+        );
+        // Only the heart that was just clicked is mid-burst. Every other one
+        // is simply on or off, and draws in one call.
+        let flight = spark::phase(ui.ctx(), response.id);
+        let filled = flight.map_or(f32::from(saved), spark::fill);
+        let scale = flight.map_or(1.0, spark::pop) * (1.0 - 0.08 * press);
+        if filled < 0.996 {
+            paint_icon(
+                ui,
+                Icon::Heart,
+                rect,
+                size * scale,
+                motion::mix(palette.secondary, palette.text, lit).gamma_multiply(1.0 - filled),
+            );
+        }
+        if filled > 0.004 {
+            paint_icon(
+                ui,
+                Icon::HeartFilled,
+                rect,
+                size * scale,
+                motion::mix(palette.accent, palette.text, lit).gamma_multiply(filled),
+            );
+        }
+    }
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if tooltip.is_empty() {
+        response
+    } else {
+        response.on_hover_text(tooltip)
+    }
+}
+
 /// Horizontal offset that optically centers play triangles.
 ///
 /// Lucide includes a 1/24-width shift; a measured 3% shift centers the icon at
@@ -988,5 +1050,73 @@ mod tests {
             assert!(galley.rows[0].glyphs.len() >= 5);
         });
         output.textures_delta.clear();
+    }
+}
+
+#[cfg(test)]
+mod heart_tests {
+    use super::*;
+
+    fn draw_heart(ctx: &egui::Context, events: Vec<egui::Event>) -> Response {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(200.0, 120.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut placed = None;
+        let mut output = ctx.run_ui(input, |ui| {
+            placed = Some(heart_button(ui, &Palette::dark(), false, 16.0, ""));
+        });
+        output.textures_delta.clear();
+        placed.expect("the heart was never drawn")
+    }
+
+    fn press(at: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    #[test]
+    fn liking_sets_a_burst_off_where_the_heart_is() {
+        let ctx = egui::Context::default();
+        let heart = draw_heart(&ctx, Vec::new());
+        if motion::reduced(&ctx) {
+            return;
+        }
+        let at = heart.rect.center();
+
+        let held = draw_heart(&ctx, vec![egui::Event::PointerMoved(at), press(at, true)]);
+        assert!(
+            spark::phase(&ctx, held.id).is_none(),
+            "holding the button down already set it off"
+        );
+
+        let released = draw_heart(&ctx, vec![press(at, false)]);
+        assert!(released.clicked(), "the click never reached the heart");
+        assert!(
+            spark::phase(&ctx, released.id).is_some(),
+            "liking drew no burst"
+        );
+    }
+
+    #[test]
+    fn a_heart_nobody_touched_stays_quiet() {
+        let ctx = egui::Context::default();
+        let heart = draw_heart(&ctx, Vec::new());
+        let away = egui::Pos2::new(180.0, 110.0);
+        draw_heart(
+            &ctx,
+            vec![egui::Event::PointerMoved(away), press(away, true)],
+        );
+        let released = draw_heart(&ctx, vec![press(away, false)]);
+        assert!(!released.clicked());
+        assert!(spark::phase(&ctx, heart.id).is_none());
     }
 }

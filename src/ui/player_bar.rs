@@ -216,10 +216,10 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
 
     if !now.is_episode {
         let saved = app.is_saved(&now.uri).unwrap_or(false);
-        let (icon, color, tooltip) = if saved {
-            (Icon::HeartFilled, palette.accent, "Remove from Liked Songs")
+        let tooltip = if saved {
+            "Remove from Liked Songs"
         } else {
-            (Icon::Heart, palette.secondary, "Save to Liked Songs")
+            "Save to Liked Songs"
         };
         // Sit the heart just past the actual text, not at the region's far
         // edge, so it stays visually attached to the title.
@@ -241,7 +241,7 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
                 .max_rect(heart_rect)
                 .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
         );
-        if theme::icon_button(&mut heart_ui, icon, 17.0, color, palette.text, tooltip).clicked() {
+        if theme::heart_button(&mut heart_ui, &palette, saved, 17.0, tooltip).clicked() {
             app.actions.push(Action::ToggleSaved(now.uri.clone()));
         }
     }

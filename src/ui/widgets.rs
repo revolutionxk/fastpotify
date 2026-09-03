@@ -1200,17 +1200,14 @@ pub fn track_row(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<RowPic
                     .max_rect(heart_rect)
                     .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
             );
-            let (icon, color) = if saved == Some(true) {
-                (Icon::HeartFilled, palette.accent)
-            } else {
-                (Icon::Heart, palette.secondary)
-            };
             let tooltip = if saved == Some(true) {
                 "Remove from Liked Songs"
             } else {
                 "Save to Liked Songs"
             };
-            if theme::icon_button(&mut child, icon, 16.0, color, palette.text, tooltip).clicked() {
+            if theme::heart_button(&mut child, &palette, saved == Some(true), 16.0, tooltip)
+                .clicked()
+            {
                 app.actions
                     .push(Action::ToggleSaved(row.item.uri().to_string()));
             }

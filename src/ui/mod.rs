@@ -52,6 +52,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     devices::popup(app, ctx);
     dialogs::show(app, ctx);
     widgets::drag_ghost(ctx, &app.palette);
+    theme::spark::draw(ctx);
     toasts(app, ctx, theme::PLAYER_BAR_HEIGHT + 16.0);
     window_controls(ui, &app.palette);
     window_resize(ui);
