@@ -178,6 +178,9 @@ pub struct App {
     /// The window should close and reopen at once as the other kind: the
     /// big window or the Winamp mini player.
     pub switch_intent: bool,
+    /// Where the small player's window sits now, and where to reopen it.
+    pub mini_last_pos: Option<[f32; 2]>,
+    pub mini_restore_pos: Option<[f32; 2]>,
     /// Commands from control clients (a second `fastpotify <verb>` launch,
     /// a Raycast script), on the platforms where they do not arrive through
     /// MPRIS. Drained every frame.
@@ -499,6 +502,8 @@ impl App {
             hide_intent: false,
             wants_show: false,
             switch_intent: false,
+            mini_last_pos: None,
+            mini_restore_pos: session.mini_pos,
             control_commands: None,
             control_now_playing: None,
             control_devices: None,
@@ -1782,6 +1787,17 @@ impl App {
             winamp_on_top_level(self.settings.winamp_window, self.settings.winamp_on_top)
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+        }
+    }
+
+    /// Pushes the small player's always-on-top level to the live window. The
+    /// level is chosen when the window is made, so a change made while it is
+    /// open has to be sent to it.
+    fn push_mini_level(&self, ctx: &egui::Context) {
+        if self.settings.mini_window {
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(on_top_window_level(
+                self.settings.mini_on_top,
+            )));
         }
     }
 
@@ -5751,6 +5767,22 @@ impl App {
                 }
                 Err(error) => self.toast_error(format!("Couldn't clear artwork: {error}")),
             },
+            Action::ToggleMiniPlayer => {
+                // One window at a time, and the two small windows are not the
+                // same window: opening this one puts the Winamp one away.
+                if self.settings.mini_window {
+                    self.mini_restore_pos = self.mini_last_pos.or(self.mini_restore_pos);
+                }
+                self.session_window_size = self.last_window_size.or(self.session_window_size);
+                self.session_window_pos = self.last_window_pos.or(self.session_window_pos);
+                self.settings.mini_window = !self.settings.mini_window;
+                if self.settings.mini_window {
+                    self.settings.winamp_window = false;
+                }
+                self.settings_dirty = true;
+                self.switch_intent = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             Action::ToggleWinampWindow => {
                 // One window at a time: this one closes and the loop in
                 // `main` opens the other kind where each was last.
@@ -5760,6 +5792,9 @@ impl App {
                 self.session_window_size = self.last_window_size.or(self.session_window_size);
                 self.session_window_pos = self.last_window_pos.or(self.session_window_pos);
                 self.settings.winamp_window = !self.settings.winamp_window;
+                if self.settings.winamp_window {
+                    self.settings.mini_window = false;
+                }
                 self.settings_dirty = true;
                 self.switch_intent = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -5774,6 +5809,11 @@ impl App {
             Action::SetSkinScale(scale) => {
                 self.settings.skin_scale = Some(scale);
                 self.settings_dirty = true;
+            }
+            Action::ToggleMiniOnTop => {
+                self.settings.mini_on_top = !self.settings.mini_on_top;
+                self.settings_dirty = true;
+                self.push_mini_level(ctx);
             }
             Action::ToggleWinampOnTop => {
                 self.settings.winamp_on_top = !self.settings.winamp_on_top;
@@ -6138,15 +6178,20 @@ impl App {
         if self.settings.winamp_window && needs_sign_in && !self.switch_intent {
             self.actions.push(Action::ToggleWinampWindow);
         }
+        if self.settings.mini_window && needs_sign_in && !self.switch_intent {
+            self.actions.push(Action::ToggleMiniPlayer);
+        }
         if self.settings.winamp_window {
             crate::ui::winamp::show(self, ui);
+        } else if self.settings.mini_window {
+            crate::ui::mini::show(self, ui);
         } else {
             crate::ui::show(self, ui);
         }
         self.apply_actions(ctx);
         self.sync_media_controls(ctx);
 
-        if !self.settings.winamp_window && !self.switch_intent {
+        if !self.settings.winamp_window && !self.settings.mini_window && !self.switch_intent {
             if let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
                 self.last_window_size = Some([rect.width(), rect.height()]);
             }
@@ -6320,6 +6365,7 @@ impl App {
                 queue_open: Some(self.show_queue_panel),
                 queue_tab: Some(self.queue_tab.encode().to_string()),
                 winamp_pos: self.winamp.last_pos.or(self.winamp.restore_pos),
+                mini_pos: self.mini_last_pos.or(self.mini_restore_pos),
                 milkdrop_pos: self.milkdrop_pos,
             }
             .save(&self.dirs.session_file());
@@ -9456,6 +9502,78 @@ mod tests {
         );
         drop(restored);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The two small windows are alternatives, not layers: opening either one
+    /// closes the other, and coming back lands on the main window.
+    #[test]
+    fn only_one_small_window_is_open_at_a_time() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+
+        app.actions.push(Action::ToggleMiniPlayer);
+        app.apply_actions(&ctx);
+        assert!(app.settings.mini_window);
+        assert!(!app.settings.winamp_window);
+        assert!(app.switch_intent, "the window was not asked to reopen");
+
+        app.switch_intent = false;
+        app.actions.push(Action::ToggleWinampWindow);
+        app.apply_actions(&ctx);
+        assert!(app.settings.winamp_window);
+        assert!(
+            !app.settings.mini_window,
+            "both small windows claimed the one window there is"
+        );
+
+        app.switch_intent = false;
+        app.actions.push(Action::ToggleMiniPlayer);
+        app.apply_actions(&ctx);
+        assert!(app.settings.mini_window);
+        assert!(!app.settings.winamp_window);
+
+        app.switch_intent = false;
+        app.actions.push(Action::ToggleMiniPlayer);
+        app.apply_actions(&ctx);
+        assert!(
+            !app.settings.mini_window && !app.settings.winamp_window,
+            "turning the small player off has to land on the main window"
+        );
+    }
+
+    /// Closing the small player puts it back where it was next time.
+    #[test]
+    fn the_small_player_reopens_where_it_was_left() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.actions.push(Action::ToggleMiniPlayer);
+        app.apply_actions(&ctx);
+
+        app.mini_last_pos = Some([420.0, 260.0]);
+        app.switch_intent = false;
+        app.actions.push(Action::ToggleMiniPlayer);
+        app.apply_actions(&ctx);
+        assert_eq!(app.mini_restore_pos, Some([420.0, 260.0]));
+
+        // Coming back from the main window must not lose it.
+        app.switch_intent = false;
+        app.actions.push(Action::ToggleMiniPlayer);
+        app.apply_actions(&ctx);
+        assert_eq!(app.mini_restore_pos, Some([420.0, 260.0]));
+    }
+
+    /// The main window's geometry survives the frame that closes it, which is
+    /// drawn while the small player is already the window that is wanted.
+    #[test]
+    fn opening_the_small_player_does_not_overwrite_main_window_geometry() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.last_window_size = Some([1024.0, 768.0]);
+        app.last_window_pos = Some([100.0, 150.0]);
+        app.actions.push(Action::ToggleMiniPlayer);
+        app.apply_actions(&ctx);
+        assert_eq!(app.session_window_size, Some([1024.0, 768.0]));
+        assert_eq!(app.session_window_pos, Some([100.0, 150.0]));
     }
 
     /// Switching from Winamp back to the main window preserves the main

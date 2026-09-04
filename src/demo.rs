@@ -1224,6 +1224,206 @@ mod tests {
 
     /// Every page, panel, and dialog lays out without panicking.
     #[test]
+    fn the_small_player_draws_what_is_playing_and_its_settings() {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-mini-test-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings {
+                mini_window: true,
+                ..Settings::default()
+            },
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+
+        let size = crate::ui::mini::window_size(&app.settings);
+        let drawn = |app: &mut App, ctx: &egui::Context| -> Vec<String> {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            };
+            let mut said = Vec::new();
+            fn walk(shape: &egui::epaint::Shape, said: &mut Vec<String>) {
+                match shape {
+                    egui::epaint::Shape::Text(text) => said.push(text.galley.job.text.clone()),
+                    egui::epaint::Shape::Vec(shapes) => {
+                        shapes.iter().for_each(|shape| walk(shape, said))
+                    }
+                    _ => {}
+                }
+            }
+            for _ in 0..4 {
+                said.clear();
+                let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+                output.textures_delta.clear();
+                for clipped in &output.shapes {
+                    walk(&clipped.shape, &mut said);
+                }
+            }
+            said
+        };
+
+        let said = drawn(&mut app, &ctx);
+        assert!(
+            said.iter().any(|text| text.contains("Rosewood")),
+            "the small player never named the song: {said:?}"
+        );
+        assert!(
+            !said.iter().any(|text| text.contains("Liked Songs")),
+            "the small player drew the big window's sidebar too: {said:?}"
+        );
+
+        // Hovering brings the transport and the volume over the art. The play
+        // disc is the only large circle the player ever draws, so counting
+        // those says whether the overlay arrived.
+        let discs = |app: &mut App, at: Option<egui::Pos2>| -> usize {
+            let events = vec![at.map_or(egui::Event::PointerGone, egui::Event::PointerMoved)];
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            };
+            let mut found = 0;
+            fn walk(shape: &egui::epaint::Shape, found: &mut usize) {
+                match shape {
+                    egui::epaint::Shape::Circle(circle) if circle.radius > 15.0 => *found += 1,
+                    egui::epaint::Shape::Vec(shapes) => {
+                        shapes.iter().for_each(|shape| walk(shape, found))
+                    }
+                    _ => {}
+                }
+            }
+            // The overlay springs in, so give it frames to arrive.
+            for _ in 0..40 {
+                found = 0;
+                let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+                output.textures_delta.clear();
+                for clipped in &output.shapes {
+                    walk(&clipped.shape, &mut found);
+                }
+            }
+            found
+        };
+        let over = egui::pos2(size.x / 2.0, size.y * 0.35);
+        assert!(
+            discs(&mut app, Some(over)) > 0,
+            "hovering the small player never brought the controls up"
+        );
+        assert_eq!(
+            discs(&mut app, None),
+            0,
+            "the controls stayed over the art with the pointer gone"
+        );
+
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("mini-settings"), true));
+        let said = drawn(&mut app, &ctx);
+        for label in ["Mini player settings", "Background colour", "Queue", "Done"] {
+            assert!(
+                said.iter().any(|text| text == label),
+                "the settings sheet is missing {label:?}: {said:?}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The wheel is the fast way to change the volume in a window this small,
+    /// so it has to work over the whole of it and not only over the slider.
+    #[test]
+    fn the_wheel_over_the_small_player_changes_the_volume() {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-wheel-test-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings {
+                mini_window: true,
+                ..Settings::default()
+            },
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        let size = crate::ui::mini::window_size(&app.settings);
+
+        let turn = |app: &mut App, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.frame_ui(ui));
+            output.textures_delta.clear();
+        };
+
+        // Put the pointer over the art, which is not the volume slider.
+        let over = egui::pos2(size.x / 2.0, size.y * 0.35);
+        turn(&mut app, vec![egui::Event::PointerMoved(over)]);
+        let level = |app: &mut App| {
+            app.now_playing()
+                .map(|now| now.volume_percent)
+                .unwrap_or_else(|| crate::app::volume_to_percent(app.local.volume))
+        };
+        let before = level(&mut app);
+
+        turn(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(over),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0.0, -1.0),
+                    modifiers: egui::Modifiers::default(),
+                    phase: egui::TouchPhase::Move,
+                },
+            ],
+        );
+        let after = level(&mut app);
+        assert!(
+            after < before,
+            "turning the wheel down over the player left the volume at {after}"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn asking_the_small_player_for_the_queue_makes_the_window_taller() {
+        let plain = crate::ui::mini::window_size(&Settings::default());
+        let taller = crate::ui::mini::window_size(&Settings {
+            mini_queue: true,
+            ..Settings::default()
+        });
+        assert!(taller.y > plain.y);
+        assert_eq!(taller.x, plain.x);
+    }
+
+    #[test]
     fn every_surface_renders_headless() {
         let root =
             std::env::temp_dir().join(format!("fastpotify-render-test-{}", std::process::id()));

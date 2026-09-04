@@ -1794,8 +1794,15 @@ pub enum SliderEvent {
 /// free-spinning wheel's fractional lines and a trackpad's points add up
 /// to the same steps, fifty points to a notch.
 pub fn wheel_notches(ui: &Ui, response: &egui::Response) -> i32 {
+    wheel_notches_over(ui, response.hovered(), response.id)
+}
+
+/// The same count, for callers that know the pointer is over them without
+/// having registered a widget to ask. A window-sized widget would sit over
+/// everything under it and take the hover with it.
+pub fn wheel_notches_over(ui: &Ui, hovered: bool, id: egui::Id) -> i32 {
     const NOTCH: f32 = 50.0;
-    if !response.hovered() {
+    if !hovered {
         return 0;
     }
     let (lines, points) = ui.input(|input| {
@@ -1817,7 +1824,7 @@ pub fn wheel_notches(ui: &Ui, response: &egui::Response) -> i32 {
         }
         (lines, points)
     });
-    let id = response.id.with("wheel");
+    let id = id.with("wheel");
     let total = ui.data(|data| data.get_temp::<f32>(id)).unwrap_or(0.0) + points + lines * NOTCH;
     let notches = (total / NOTCH).trunc();
     ui.data_mut(|data| data.insert_temp(id, total - notches * NOTCH));

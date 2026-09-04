@@ -527,20 +527,31 @@ fn log_panics(path: std::path::PathBuf) {
     }));
 }
 
-/// The Winamp mini player's window, when that is the window to open.
+/// A small window, when one of the two kinds is the window to open.
 struct MiniWindow {
-    /// A first size; the window corrects it once it knows the display.
+    /// A first size; the Winamp window corrects it once it knows the display.
     size: egui::Vec2,
     position: Option<[f32; 2]>,
     on_top: bool,
+    /// Whether the surface is a skin, which may not be a rectangle.
+    skinned: bool,
 }
 
 impl MiniWindow {
     fn wanted(app: &app::App) -> Option<Self> {
-        app.settings.winamp_window.then(|| Self {
-            size: fastpotify::ui::winamp::initial_size(&app.settings),
-            position: app.winamp.restore_pos,
-            on_top: app.settings.winamp_on_top,
+        if app.settings.winamp_window {
+            return Some(Self {
+                size: fastpotify::ui::winamp::initial_size(&app.settings),
+                position: app.winamp.restore_pos,
+                on_top: app.settings.winamp_on_top,
+                skinned: true,
+            });
+        }
+        app.settings.mini_window.then(|| Self {
+            size: fastpotify::ui::mini::window_size(&app.settings),
+            position: app.mini_restore_pos,
+            on_top: app.settings.mini_on_top,
+            skinned: false,
         })
     }
 }
@@ -565,9 +576,10 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
     let viewport = match mini {
         Some(mini) => {
             let level = app::on_top_window_level(mini.on_top);
-            // See-through, for skins that are not rectangles; the skin
-            // paints every pixel that is the window. MilkDrop runs in its own
-            // process, so nothing else shares this window's surface.
+            // See-through: a skin may not be a rectangle, and the small
+            // player rounds its own corners. Both paint every pixel that is
+            // the window. MilkDrop runs in its own process, so nothing else
+            // shares this window's surface.
             let viewport = viewport
                 .with_decorations(false)
                 .with_transparent(true)
@@ -577,6 +589,13 @@ fn native_options(fullscreen: bool, mini: Option<MiniWindow>) -> eframe::NativeO
                 .with_min_inner_size(mini.size)
                 .with_max_inner_size(mini.size)
                 .with_window_level(level);
+            let viewport = if mini.skinned {
+                viewport
+            } else {
+                // The small player is a floating panel, not a document: it
+                // stays out of the dock and the window menu on macOS.
+                viewport.with_titlebar_shown(false).with_title_shown(false)
+            };
             match mini.position {
                 Some([x, y]) => viewport.with_position([x, y]),
                 None => viewport,
@@ -707,7 +726,7 @@ impl eframe::App for Shell {
         if self
             .app
             .as_ref()
-            .is_some_and(|app| !app.settings.winamp_window)
+            .is_some_and(|app| !app.settings.winamp_window && !app.settings.mini_window)
         {
             fastpotify::mac_vibrancy::install();
         }
@@ -732,6 +751,7 @@ impl eframe::App for Shell {
                     MenuCommand::LikedSongs => Action::Open(Page::LikedSongs),
                     MenuCommand::Sidebar => Action::ToggleSidebar,
                     MenuCommand::Queue => Action::ToggleQueuePanel,
+                    MenuCommand::MiniPlayer => Action::ToggleMiniPlayer,
                     MenuCommand::Settings => Action::Open(Page::Settings),
                     MenuCommand::Shortcuts => Action::ShowDialog(Dialog::Shortcuts),
                     MenuCommand::Back => Action::Back,
@@ -789,7 +809,7 @@ impl eframe::App for Shell {
         if self
             .app
             .as_ref()
-            .is_some_and(|app| app.settings.winamp_window)
+            .is_some_and(|app| app.settings.winamp_window || app.settings.mini_window)
             || fastpotify::theme::vibrant()
         {
             [0.0; 4]

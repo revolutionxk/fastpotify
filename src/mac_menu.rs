@@ -17,6 +17,7 @@ pub enum MenuCommand {
     LikedSongs,
     Sidebar,
     Queue,
+    MiniPlayer,
     Settings,
     Shortcuts,
     Back,
@@ -161,6 +162,11 @@ mod mac_impl {
             #[unsafe(method(toggleSidebar:))]
             fn toggle_sidebar(&self, _sender: &NSObject) {
                 push_command(MenuCommand::Sidebar);
+            }
+
+            #[unsafe(method(toggleMiniPlayer:))]
+            fn toggle_mini_player(&self, _sender: &NSObject) {
+                push_command(MenuCommand::MiniPlayer);
             }
 
             #[unsafe(method(toggleQueue:))]
@@ -482,6 +488,15 @@ mod mac_impl {
             Some(sel!(toggleQueue:)),
             ns_string!("u"),
             Some(NSEventModifierFlags::Command),
+            Some(target),
+        ));
+        view_menu.addItem(&NSMenuItem::separatorItem(mtm));
+        view_menu.addItem(&create_item(
+            mtm,
+            ns_string!("Mini Player"),
+            Some(sel!(toggleMiniPlayer:)),
+            ns_string!("n"),
+            Some(NSEventModifierFlags::Command | NSEventModifierFlags::Shift),
             Some(target),
         ));
         view_menu.addItem(&NSMenuItem::separatorItem(mtm));

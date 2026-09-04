@@ -112,6 +112,17 @@ pub struct Settings {
     pub skin_scale: Option<u8>,
     /// The Winamp window stays above other windows.
     pub winamp_on_top: bool,
+    /// The small always-on-top player is the open window.
+    pub mini_window: bool,
+    /// The small player paints its ground in the album art's colour.
+    pub mini_tinted: bool,
+    /// The small player lists what is coming next under the controls.
+    pub mini_queue: bool,
+    /// The small player stays above other windows. On by default: a player
+    /// this size exists to be glanced at while another application has the
+    /// screen, and one that hides behind them has no reason to be small.
+    #[serde(default = "yes")]
+    pub mini_on_top: bool,
     /// The mini player's visualiser: bars, scope, or off.
     pub vis: VisMode,
     /// The playlist window is open under the mini player.
@@ -190,6 +201,10 @@ impl Default for Settings {
             skin: None,
             skin_scale: None,
             winamp_on_top: false,
+            mini_window: false,
+            mini_tinted: false,
+            mini_queue: false,
+            mini_on_top: true,
             vis: VisMode::default(),
             playlist_open: false,
             playlist_height: 174,
@@ -211,6 +226,10 @@ impl Default for Settings {
             milkdrop_size: crate::milkdrop::DEFAULT_SIZE,
         }
     }
+}
+
+const fn yes() -> bool {
+    true
 }
 
 fn default_buffer_ms() -> u32 {
@@ -295,6 +314,16 @@ mod tests {
         assert!(!settings.playlist_shaded);
         assert!(!settings.eq_shaded);
         assert!(!settings.winamp_shaded);
+        assert!(
+            !settings.mini_window,
+            "an old settings file opened the small player"
+        );
+        assert!(!settings.mini_tinted);
+        assert!(!settings.mini_queue);
+        assert!(
+            settings.mini_on_top,
+            "the small player has to float, or being small buys nothing"
+        );
     }
 
     #[test]
@@ -431,6 +460,8 @@ pub struct SessionState {
     pub queue_tab: Option<String>,
     /// Last outer position of the Winamp window.
     pub winamp_pos: Option<[f32; 2]>,
+    /// Last outer position of the small player's window.
+    pub mini_pos: Option<[f32; 2]>,
     /// Last outer position of the MilkDrop window.
     pub milkdrop_pos: Option<[f32; 2]>,
 }

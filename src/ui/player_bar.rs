@@ -458,6 +458,21 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
 fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>) {
     let palette = app.palette;
     ui.spacing_mut().item_spacing.x = 6.0;
+    // This row runs right to left, so what is added first sits furthest
+    // right: past the volume, where Spotify keeps it.
+    if theme::icon_button(
+        ui,
+        Icon::Minimize,
+        17.0,
+        palette.secondary,
+        palette.text,
+        super::keys::platform_shortcut("Mini player (Ctrl+Shift+N)", "Mini player (Cmd+Shift+N)"),
+    )
+    .clicked()
+    {
+        app.actions.push(Action::ToggleMiniPlayer);
+    }
+    ui.add_space(4.0);
     let volume = now
         .map(|now| now.volume_percent)
         .unwrap_or_else(|| crate::app::volume_to_percent(app.local.volume));

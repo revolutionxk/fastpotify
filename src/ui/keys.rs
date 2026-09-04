@@ -11,6 +11,7 @@ pub(super) const fn platform_shortcut(ctrl: &'static str, cmd: &'static str) -> 
 
 pub(super) const SIDEBAR_SHORTCUT: &str = platform_shortcut("Ctrl+B", "Cmd+B");
 pub(super) const QUIT_SHORTCUT: &str = platform_shortcut("Ctrl+Q", "Cmd+Q");
+pub(super) const MINI_SHORTCUT: &str = platform_shortcut("Ctrl+Shift+N", "Cmd+Shift+N");
 pub(super) const WINAMP_SHORTCUT: &str = platform_shortcut("Ctrl+M", "Cmd+Shift+M");
 pub(super) const MILKDROP_SHORTCUT: &str = platform_shortcut("Ctrl+Shift+K", "Cmd+Shift+K");
 
@@ -53,6 +54,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         } else {
             key(Modifiers::COMMAND, Key::M, Action::ToggleWinampWindow);
         }
+        key(
+            Modifiers::COMMAND | Modifiers::SHIFT,
+            Key::N,
+            Action::ToggleMiniPlayer,
+        );
         // Winamp's key for starting and stopping the visualisation plug-in.
         key(
             Modifiers::COMMAND | Modifiers::SHIFT,
@@ -186,6 +192,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
         platform_shortcut("Ctrl+Shift+B", "Cmd+Shift+B"),
         "Go to the playing album",
     ),
+    (MINI_SHORTCUT, "Mini player"),
     (WINAMP_SHORTCUT, "Winamp mini player"),
     (MILKDROP_SHORTCUT, "MilkDrop, under the mini player"),
     ("F  or  double-click", "MilkDrop: fill the screen"),

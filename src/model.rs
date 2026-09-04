@@ -740,12 +740,16 @@ pub enum Action {
     ClearPlayHistory,
     /// Open or close the Winamp window.
     ToggleWinampWindow,
+    /// Swap between the main window and the small always-on-top player.
+    ToggleMiniPlayer,
     /// Select a skin, or the built-in skin for `None`.
     SetSkin(Option<String>),
     /// Install and select a skin file.
     InstallSkin(std::path::PathBuf),
     /// Screen pixels per skin pixel in the Winamp window.
     SetSkinScale(u8),
+    /// Whether the small player floats above other windows.
+    ToggleMiniOnTop,
     ToggleWinampOnTop,
     OpenSkinsFolder,
     /// Cycle bars, scope, and off.
