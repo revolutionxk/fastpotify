@@ -34,7 +34,7 @@ use librespot_playback::{
 };
 use sha1::{Digest, Sha1};
 
-use crate::sink::{ErrorHook, RodioSink};
+use crate::sink::{AudioControl, ErrorHook, RodioSink};
 use crate::vis::{AudioTap, Tapped};
 
 #[derive(Clone, Debug)]
@@ -288,6 +288,7 @@ pub struct Engine {
     /// What was playing when the session ended on its own.
     interrupted: Arc<Mutex<Option<Interrupted>>>,
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
+    audio: Arc<AudioControl>,
 }
 
 impl Engine {
@@ -336,16 +337,23 @@ impl Engine {
             ..LocalState::default()
         }));
         let session = Session::new(session_config, Some(cache));
+        let audio = AudioControl::new(config.buffer_ms);
         let (sink_builder, volume) = sink_builder(
             config,
             Arc::clone(&state),
             Arc::clone(&notify),
             &mixer,
             Arc::clone(&normalisation_factor),
+            Arc::clone(&audio),
         );
         let player = Player::new(player_config, session.clone(), volume, sink_builder);
         let events = player.get_player_event_channel();
-        tokio::spawn(run_events(events, Arc::clone(&state), Arc::clone(&notify)));
+        tokio::spawn(run_events(
+            events,
+            Arc::clone(&state),
+            Arc::clone(&notify),
+            Arc::clone(&audio),
+        ));
 
         let connect_config = ConnectConfig {
             name: config.device_name.clone(),
@@ -405,6 +413,7 @@ impl Engine {
             state,
             interrupted,
             shutting_down,
+            audio,
         })
     }
 
@@ -503,6 +512,21 @@ impl Engine {
     }
 
     pub fn command(&self, command: PlayerCommand) -> Result<()> {
+        let interrupts_audio = command_interrupts_audio(
+            &self.state.lock().unwrap_or_else(|p| p.into_inner()),
+            &command,
+        );
+        if interrupts_audio {
+            self.audio.interrupt();
+        }
+        let result = self.send_command(command);
+        if interrupts_audio && result.is_err() {
+            self.audio.stopped();
+        }
+        result
+    }
+
+    fn send_command(&self, command: PlayerCommand) -> Result<()> {
         let spirc = &self.spirc;
         match command {
             PlayerCommand::Toggle => spirc.play_pause()?,
@@ -572,6 +596,14 @@ impl Engine {
     }
 }
 
+fn command_interrupts_audio(state: &LocalState, command: &PlayerCommand) -> bool {
+    state.playback == Playback::Playing
+        && matches!(
+            command,
+            PlayerCommand::Next | PlayerCommand::Previous | PlayerCommand::Load(_)
+        )
+}
+
 /// Builds the audio sink and chooses where volume is applied.
 ///
 /// The default sink opens the device on playback and reports errors instead
@@ -588,6 +620,7 @@ fn sink_builder(
     notify: Notify,
     mixer: &Arc<dyn Mixer>,
     normalisation: Arc<std::sync::atomic::AtomicU64>,
+    audio: Arc<AudioControl>,
 ) -> SinkAndVolume {
     let device = config.audio_device.clone();
     let buffer_ms = config.buffer_ms;
@@ -631,7 +664,9 @@ fn sink_builder(
     let ceiling = mixer.get_soft_volume();
     (
         Box::new(move || {
-            let sink = Box::new(RodioSink::new(device, report, volume, buffer_ms, fade_ms));
+            let sink = Box::new(RodioSink::new(
+                device, report, volume, buffer_ms, fade_ms, audio,
+            ));
             Box::new(Tapped::new(sink, tap, ceiling, false, eq, normalisation)) as Box<dyn Sink>
         }),
         Box::new(NoOpVolume),
@@ -642,6 +677,7 @@ async fn run_events(
     mut events: tokio::sync::mpsc::UnboundedReceiver<PlayerEvent>,
     state: Arc<Mutex<LocalState>>,
     notify: Notify,
+    audio: Arc<AudioControl>,
 ) {
     let mut play_request_id = None;
     while let Some(event) = events.recv().await {
@@ -656,6 +692,13 @@ async fn run_events(
             && current != incoming
         {
             continue;
+        }
+        match &event {
+            PlayerEvent::TrackChanged { .. } | PlayerEvent::Seeked { .. } => {
+                audio.track_changed();
+            }
+            PlayerEvent::Stopped { .. } => audio.stopped(),
+            _ => {}
         }
         let snapshot = {
             let mut current = state.lock().unwrap_or_else(|p| p.into_inner());
@@ -1029,6 +1072,25 @@ mod tests {
             },
         );
         assert_eq!(state.playback, Playback::Playing);
+    }
+
+    #[test]
+    fn replacing_a_playing_track_interrupts_queued_audio() {
+        let playing = LocalState {
+            playback: Playback::Playing,
+            ..LocalState::default()
+        };
+        let stopped = LocalState::default();
+        let load = PlayerCommand::Load(LoadSpec::default());
+
+        assert!(command_interrupts_audio(&playing, &PlayerCommand::Next));
+        assert!(command_interrupts_audio(&playing, &PlayerCommand::Previous));
+        assert!(command_interrupts_audio(&playing, &load));
+        assert!(!command_interrupts_audio(&stopped, &PlayerCommand::Next));
+        assert!(!command_interrupts_audio(
+            &playing,
+            &PlayerCommand::Seek(10)
+        ));
     }
 
     /// Spotify making this Connect device inactive must not be mistaken for
