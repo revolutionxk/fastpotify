@@ -65,6 +65,7 @@ pub struct Settings {
     #[serde(default = "default_buffer_ms")]
     pub audio_buffer_ms: u32,
     pub fade_ms: u32,
+    pub crossfade_ms: u32,
     pub audio_cache: bool,
     pub audio_cache_mb: u64,
     pub theme: ThemeChoice,
@@ -177,6 +178,7 @@ impl Default for Settings {
             audio_device: None,
             audio_buffer_ms: default_buffer_ms(),
             fade_ms: 0,
+            crossfade_ms: 0,
             audio_cache: true,
             audio_cache_mb: 1024,
             theme: ThemeChoice::Dark,

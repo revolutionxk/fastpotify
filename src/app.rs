@@ -414,6 +414,7 @@ pub struct App {
     /// Winamp window state and active skin.
     pub winamp: crate::winamp::WinampState,
     fade_ms: crate::sink::FadeMs,
+    crossfade_ms: crate::player::CrossfadeMs,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -451,12 +452,14 @@ impl App {
             *shared = eq_settings(&settings);
         }
         let fade_ms = crate::sink::shared_fade(settings.fade_ms);
+        let crossfade_ms = crate::player::shared_crossfade(settings.crossfade_ms);
         let engine_config = engine_config(
             &dirs,
             &settings,
             std::sync::Arc::clone(&tap),
             std::sync::Arc::clone(&eq),
             std::sync::Arc::clone(&fade_ms),
+            std::sync::Arc::clone(&crossfade_ms),
         );
         let backend = Backend::spawn(
             dirs.clone(),
@@ -653,6 +656,7 @@ impl App {
             last_update_check: None,
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
             fade_ms,
+            crossfade_ms,
         };
         app.local.volume = app.settings.volume;
         // What was played here is on disk and needs nothing from the
@@ -2084,6 +2088,10 @@ impl App {
     fn push_fade(&self) {
         self.fade_ms.store(
             crate::sink::clamp_fade_ms(self.settings.fade_ms),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.crossfade_ms.store(
+            crate::player::clamp_crossfade_ms(self.settings.crossfade_ms),
             std::sync::atomic::Ordering::Relaxed,
         );
     }
@@ -5706,6 +5714,7 @@ impl App {
                     std::sync::Arc::clone(&self.winamp.tap),
                     std::sync::Arc::clone(&self.winamp.eq),
                     std::sync::Arc::clone(&self.fade_ms),
+                    std::sync::Arc::clone(&self.crossfade_ms),
                 );
                 self.backend.send(Command::RestartEngine(config));
                 if self.local_ready {
@@ -6434,11 +6443,13 @@ pub fn engine_config(
     tap: std::sync::Arc<crate::vis::AudioTap>,
     eq: crate::eq::SharedEq,
     fade_ms: crate::sink::FadeMs,
+    crossfade_ms: crate::player::CrossfadeMs,
 ) -> EngineConfig {
     EngineConfig {
         tap,
         eq,
         fade_ms,
+        crossfade_ms,
         device_name: settings.device_name.trim().to_string(),
         bitrate_kbps: settings.bitrate,
         normalisation: settings.normalisation,

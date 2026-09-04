@@ -175,10 +175,10 @@ projectm-sys = { git = "https://github.com/crmne/projectm-rs", branch = "respect
 # normalisation-factor reporting for the visualisers, and a distinct event
 # when Spotify refuses an audio key. Every librespot crate comes from the
 # fork so one copy exists. Drop patches as upstream takes them.
-librespot-audio = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-connect = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-core = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-metadata = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-oauth = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-playback = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
-librespot-protocol = { git = "https://github.com/crmne/librespot", branch = "fastpotify-0.8" }
+librespot-audio = { path = "../librespot-fastpotify/audio" }
+librespot-connect = { path = "../librespot-fastpotify/connect" }
+librespot-core = { path = "../librespot-fastpotify/core" }
+librespot-metadata = { path = "../librespot-fastpotify/metadata" }
+librespot-oauth = { path = "../librespot-fastpotify/oauth" }
+librespot-playback = { path = "../librespot-fastpotify/playback" }
+librespot-protocol = { path = "../librespot-fastpotify/protocol" }

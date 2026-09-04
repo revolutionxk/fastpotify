@@ -56,6 +56,7 @@ pub struct EngineConfig {
     /// The equalizer's settings, shared with the window that sets them.
     pub eq: crate::eq::SharedEq,
     pub fade_ms: crate::sink::FadeMs,
+    pub crossfade_ms: CrossfadeMs,
 }
 
 impl EngineConfig {
@@ -81,6 +82,25 @@ impl EngineConfig {
             160 => Bitrate::Bitrate160,
             _ => Bitrate::Bitrate320,
         }
+    }
+}
+
+pub const CROSSFADE_MAX_MS: u32 = 12_000;
+
+pub type CrossfadeMs = Arc<std::sync::atomic::AtomicU32>;
+
+pub fn shared_crossfade(ms: u32) -> CrossfadeMs {
+    Arc::new(std::sync::atomic::AtomicU32::new(clamp_crossfade_ms(ms)))
+}
+
+pub fn clamp_crossfade_ms(ms: u32) -> u32 {
+    (ms / 1000).min(CROSSFADE_MAX_MS / 1000) * 1000
+}
+
+pub fn crossfade_label(ms: u32) -> String {
+    match clamp_crossfade_ms(ms) {
+        0 => "Off".to_string(),
+        ms => format!("{} s", ms / 1000),
     }
 }
 
@@ -299,6 +319,7 @@ impl Engine {
             // the tap can undo it for the visualisers: they show the music,
             // not the loudness housekeeping.
             normalisation_report: Some(Arc::clone(&normalisation_factor)),
+            crossfade_ms: Some(Arc::clone(&config.crossfade_ms)),
             ..PlayerConfig::default()
         };
 
@@ -893,6 +914,20 @@ fn decode_folder_name(encoded: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_crossfade_from_outside_the_range_is_brought_back_in() {
+        assert_eq!(clamp_crossfade_ms(60_000), CROSSFADE_MAX_MS);
+        assert_eq!(clamp_crossfade_ms(6_000), 6_000);
+        assert_eq!(clamp_crossfade_ms(0), 0);
+    }
+
+    #[test]
+    fn a_crossfade_of_nothing_reads_as_off() {
+        assert_eq!(crossfade_label(0), "Off");
+        assert_eq!(crossfade_label(6_000), "6 s");
+        assert_eq!(crossfade_label(CROSSFADE_MAX_MS), "12 s");
+    }
+
+    #[test]
     fn the_rootlist_markers_become_folders() {
         let uris: Vec<String> = [
             "spotify:playlist:aaa",
@@ -1055,6 +1090,7 @@ mod tests {
             tap: AudioTap::new(),
             eq: crate::eq::shared(),
             fade_ms: crate::sink::shared_fade(0),
+            crossfade_ms: shared_crossfade(0),
             device_name: "Fastpotify".into(),
             bitrate_kbps: 320,
             normalisation: false,

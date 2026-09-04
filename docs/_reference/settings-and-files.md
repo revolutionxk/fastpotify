@@ -69,6 +69,7 @@ main fields are:
 | `audio_backend` | platform | `pulseaudio` or `rodio` on Linux |
 | `audio_cache_mb` | `1024` | On-disk audio cache budget |
 | `fade_ms` | `0` | Fade on pause and resume in milliseconds; `0` is off, up to `500` |
+| `crossfade_ms` | `0` | Crossfade between songs in milliseconds; `0` is off, up to `12000` |
 | `theme` | `dark` | `dark`, `light`, or `system` |
 | `accent_from_art` | `true` | Tint pages with album art |
 | `sidebar_compact` | `false` | Names only in the library sidebar, no covers |

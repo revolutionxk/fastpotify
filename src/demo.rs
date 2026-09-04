@@ -946,6 +946,90 @@ mod tests {
     }
 
     #[test]
+    fn the_crossfade_row_names_its_length() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-crossfade-row-test-{}",
+            std::process::id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.settings.zoom = 1.0;
+        app.open(Page::Settings);
+
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 4000.0),
+            )),
+            ..Default::default()
+        };
+        let on_the_crossfade_row = |app: &mut App| -> Vec<String> {
+            let mut placed: Vec<(String, f32)> = Vec::new();
+            for _ in 0..2 {
+                placed.clear();
+                let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+                output.textures_delta.clear();
+                fn walk(shape: &egui::epaint::Shape, placed: &mut Vec<(String, f32)>) {
+                    match shape {
+                        egui::epaint::Shape::Text(text) => {
+                            placed.push((text.galley.job.text.clone(), text.pos.y))
+                        }
+                        egui::epaint::Shape::Vec(shapes) => {
+                            shapes.iter().for_each(|shape| walk(shape, placed))
+                        }
+                        _ => {}
+                    }
+                }
+                for clipped in &output.shapes {
+                    walk(&clipped.shape, &mut placed);
+                }
+            }
+            let row = placed
+                .iter()
+                .find(|(text, _)| text == "Crossfade")
+                .unwrap_or_else(|| panic!("the crossfade setting was never drawn"))
+                .1;
+            placed
+                .iter()
+                .filter(|(_, y)| (y - row).abs() < 30.0)
+                .map(|(text, _)| text.clone())
+                .collect()
+        };
+
+        let off = on_the_crossfade_row(&mut app);
+        assert!(
+            off.iter().any(|text| text == "Off"),
+            "a crossfade of nothing should read Off on its own row: {off:?}"
+        );
+
+        app.settings.crossfade_ms = 6_000;
+        let six = on_the_crossfade_row(&mut app);
+        assert!(
+            six.iter().any(|text| text == "6 s"),
+            "the chosen length should be written on its own row: {six:?}"
+        );
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn the_fade_choices_fit_on_one_row() {
         let root =
             std::env::temp_dir().join(format!("fastpotify-fade-row-test-{}", std::process::id()));

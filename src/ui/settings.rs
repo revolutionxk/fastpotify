@@ -430,6 +430,25 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         widgets::setting_row(
             ui,
             &palette,
+            "Crossfade",
+            "One song overlaps the next. Off plays them back to back.",
+            |ui| {
+                let mut seconds =
+                    crate::player::clamp_crossfade_ms(app.settings.crossfade_ms) / 1000;
+                let slider =
+                    egui::Slider::new(&mut seconds, 0..=crate::player::CROSSFADE_MAX_MS / 1000)
+                        .custom_formatter(|value, _| {
+                            crate::player::crossfade_label(value as u32 * 1000)
+                        });
+                if ui.add(slider).changed() {
+                    app.settings.crossfade_ms = seconds * 1000;
+                    changed = true;
+                }
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
             "Audio cache",
             "Save downloaded audio for later playback.",
             |ui| {
