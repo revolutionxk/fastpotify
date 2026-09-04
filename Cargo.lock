@@ -2847,6 +2847,7 @@ dependencies = [
 [[package]]
 name = "librespot-audio"
 version = "0.8.0"
+source = "git+https://github.com/revolutionxk/librespot?branch=fastpotify#6ba1c4caceeb8efd9f10d01475c28129fb0c522a"
 dependencies = [
  "aes",
  "bytes",
@@ -2865,6 +2866,7 @@ dependencies = [
 [[package]]
 name = "librespot-connect"
 version = "0.8.0"
+source = "git+https://github.com/revolutionxk/librespot?branch=fastpotify#6ba1c4caceeb8efd9f10d01475c28129fb0c522a"
 dependencies = [
  "futures-util",
  "librespot-core",
@@ -2883,6 +2885,7 @@ dependencies = [
 [[package]]
 name = "librespot-core"
 version = "0.8.0"
+source = "git+https://github.com/revolutionxk/librespot?branch=fastpotify#6ba1c4caceeb8efd9f10d01475c28129fb0c522a"
 dependencies = [
  "aes",
  "base64",
@@ -2932,12 +2935,14 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+ "vergen",
  "vergen-gitcl",
 ]
 
 [[package]]
 name = "librespot-metadata"
 version = "0.8.0"
+source = "git+https://github.com/revolutionxk/librespot?branch=fastpotify#6ba1c4caceeb8efd9f10d01475c28129fb0c522a"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2954,18 +2959,21 @@ dependencies = [
 [[package]]
 name = "librespot-oauth"
 version = "0.8.0"
+source = "git+https://github.com/revolutionxk/librespot?branch=fastpotify#6ba1c4caceeb8efd9f10d01475c28129fb0c522a"
 dependencies = [
  "log",
  "oauth2",
  "open",
  "reqwest",
  "thiserror 2.0.20",
+ "tokio",
  "url",
 ]
 
 [[package]]
 name = "librespot-playback"
 version = "0.8.0"
+source = "git+https://github.com/revolutionxk/librespot?branch=fastpotify#6ba1c4caceeb8efd9f10d01475c28129fb0c522a"
 dependencies = [
  "cpal",
  "form_urlencoded",
@@ -2990,6 +2998,7 @@ dependencies = [
 [[package]]
 name = "librespot-protocol"
 version = "0.8.0"
+source = "git+https://github.com/revolutionxk/librespot?branch=fastpotify#6ba1c4caceeb8efd9f10d01475c28129fb0c522a"
 dependencies = [
  "protobuf",
  "protobuf-codegen",
@@ -5484,7 +5493,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

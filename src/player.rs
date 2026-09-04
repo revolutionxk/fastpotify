@@ -17,6 +17,7 @@ use librespot_connect::{
     Spirc,
 };
 use librespot_core::{
+    SpotifyUri,
     authentication::Credentials,
     cache::Cache,
     config::{DeviceType, SessionConfig},
@@ -56,7 +57,7 @@ pub struct EngineConfig {
     /// The equalizer's settings, shared with the window that sets them.
     pub eq: crate::eq::SharedEq,
     pub fade_ms: crate::sink::FadeMs,
-    pub crossfade_ms: CrossfadeMs,
+    pub crossfade_ms: u32,
 }
 
 impl EngineConfig {
@@ -86,12 +87,6 @@ impl EngineConfig {
 }
 
 pub const CROSSFADE_MAX_MS: u32 = 12_000;
-
-pub type CrossfadeMs = Arc<std::sync::atomic::AtomicU32>;
-
-pub fn shared_crossfade(ms: u32) -> CrossfadeMs {
-    Arc::new(std::sync::atomic::AtomicU32::new(clamp_crossfade_ms(ms)))
-}
 
 pub fn clamp_crossfade_ms(ms: u32) -> u32 {
     (ms / 1000).min(CROSSFADE_MAX_MS / 1000) * 1000
@@ -268,6 +263,7 @@ pub enum PlayerCommand {
     /// update costs a round trip to Spotify, and librespot makes them one
     /// after another, so dragging through fifty values lagged by seconds.
     VolumePreview(u16),
+    Crossfade(u32),
     Shuffle(bool),
     Repeat(RepeatMode),
     Load(LoadSpec),
@@ -319,7 +315,7 @@ impl Engine {
             // the tap can undo it for the visualisers: they show the music,
             // not the loudness housekeeping.
             normalisation_report: Some(Arc::clone(&normalisation_factor)),
-            crossfade_ms: Some(Arc::clone(&config.crossfade_ms)),
+            crossfade: Duration::from_millis(u64::from(clamp_crossfade_ms(config.crossfade_ms))),
             ..PlayerConfig::default()
         };
 
@@ -513,13 +509,16 @@ impl Engine {
             PlayerCommand::Next => spirc.next()?,
             PlayerCommand::Previous => spirc.prev()?,
             PlayerCommand::ClearQueue => spirc.clear_queue()?,
-            PlayerCommand::AddToQueue(uri) => spirc.add_to_queue(uri)?,
+            PlayerCommand::AddToQueue(uri) => spirc.add_to_queue(SpotifyUri::from_uri(&uri)?)?,
             PlayerCommand::Seek(position_ms) => spirc.set_position_ms(position_ms)?,
             PlayerCommand::Volume(volume) => {
                 self.mixer.set_volume(volume);
                 spirc.set_volume(volume)?;
             }
             PlayerCommand::VolumePreview(volume) => self.mixer.set_volume(volume),
+            PlayerCommand::Crossfade(ms) => self
+                .player
+                .set_crossfade(Duration::from_millis(u64::from(clamp_crossfade_ms(ms)))),
             PlayerCommand::Shuffle(enabled) => spirc.shuffle(enabled)?,
             PlayerCommand::Repeat(mode) => match mode {
                 RepeatMode::Off => {
@@ -735,10 +734,7 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
         }
         PlayerEvent::Unavailable { track_id, .. } => set(
             &mut state.error,
-            Some(format!(
-                "This item isn't available: {}",
-                track_id.to_uri().unwrap_or_default()
-            )),
+            Some(format!("This item isn't available: {}", track_id.to_uri())),
         ),
         PlayerEvent::AudioKeyUnavailable { .. } => set(
             &mut state.error,
@@ -773,6 +769,7 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
         | PlayerEvent::EndOfTrack { .. }
         | PlayerEvent::PlayRequestIdChanged { .. }
         | PlayerEvent::AutoPlayChanged { .. }
+        | PlayerEvent::SetQueue { .. }
         | PlayerEvent::FilterExplicitContentChanged { .. } => false,
     }
 }
@@ -1090,7 +1087,7 @@ mod tests {
             tap: AudioTap::new(),
             eq: crate::eq::shared(),
             fade_ms: crate::sink::shared_fade(0),
-            crossfade_ms: shared_crossfade(0),
+            crossfade_ms: 0,
             device_name: "Fastpotify".into(),
             bitrate_kbps: 320,
             normalisation: false,
