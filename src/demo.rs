@@ -945,6 +945,101 @@ mod tests {
         app.backend.shutdown();
     }
 
+    #[test]
+    fn the_fade_choices_fit_on_one_row() {
+        let root =
+            std::env::temp_dir().join(format!("fastpotify-fade-row-test-{}", std::process::id()));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.settings.zoom = 1.0;
+        app.open(Page::Settings);
+
+        let width = 1280.0;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 4000.0),
+            )),
+            ..Default::default()
+        };
+        let mut placed: Vec<(String, f32, f32, f32)> = Vec::new();
+        for _ in 0..2 {
+            placed.clear();
+            let mut output = ctx.run_ui(input.clone(), |ui| app.frame_ui(ui));
+            output.textures_delta.clear();
+            fn walk(shape: &egui::epaint::Shape, placed: &mut Vec<(String, f32, f32, f32)>) {
+                match shape {
+                    egui::epaint::Shape::Text(text) => placed.push((
+                        text.galley.job.text.clone(),
+                        text.pos.x,
+                        text.pos.y,
+                        text.galley.rect.width(),
+                    )),
+                    egui::epaint::Shape::Vec(shapes) => {
+                        shapes.iter().for_each(|shape| walk(shape, placed))
+                    }
+                    _ => {}
+                }
+            }
+            for clipped in &output.shapes {
+                walk(&clipped.shape, &mut placed);
+            }
+        }
+        let label = placed
+            .iter()
+            .find(|(text, _, _, _)| text == "Fade on pause")
+            .unwrap_or_else(|| panic!("the fade setting was never drawn"));
+        let row = label.2;
+        let mut pills: Vec<(f32, f32)> = Vec::new();
+        for ms in crate::sink::FADE_MS_CHOICES {
+            let wanted = if ms == 0 {
+                "Off".to_string()
+            } else {
+                format!("{ms} ms")
+            };
+            let (_, x, _, w) = placed
+                .iter()
+                .filter(|(text, _, y, _)| *text == wanted && (y - row).abs() < 40.0)
+                .min_by(|a, b| (a.2 - row).abs().total_cmp(&(b.2 - row).abs()))
+                .unwrap_or_else(|| panic!("{wanted} was never drawn next to the fade setting"))
+                .clone();
+            pills.push((x, w));
+        }
+        assert!(
+            pills.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "the choices should read shortest to longest: {pills:?}"
+        );
+        assert!(
+            pills[0].0 > label.1 + label.3,
+            "the choices should sit right of the label, not over it: {pills:?}"
+        );
+        let (last_x, last_w) = pills[pills.len() - 1];
+        assert!(
+            last_x + last_w <= width,
+            "the last choice runs {} pixels past the window",
+            last_x + last_w - width
+        );
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// Rule: the interface zoom control puts minus on the left and plus
     /// on the right. The setting row's control is right-to-left, which
     /// used to reverse the two buttons.

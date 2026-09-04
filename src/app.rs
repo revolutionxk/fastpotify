@@ -413,6 +413,7 @@ pub struct App {
     last_update_check: Option<Instant>,
     /// Winamp window state and active skin.
     pub winamp: crate::winamp::WinampState,
+    fade_ms: crate::sink::FadeMs,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -449,11 +450,13 @@ impl App {
         if let Ok(mut shared) = eq.lock() {
             *shared = eq_settings(&settings);
         }
+        let fade_ms = crate::sink::shared_fade(settings.fade_ms);
         let engine_config = engine_config(
             &dirs,
             &settings,
             std::sync::Arc::clone(&tap),
             std::sync::Arc::clone(&eq),
+            std::sync::Arc::clone(&fade_ms),
         );
         let backend = Backend::spawn(
             dirs.clone(),
@@ -649,6 +652,7 @@ impl App {
             update: None,
             last_update_check: None,
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
+            fade_ms,
         };
         app.local.volume = app.settings.volume;
         // What was played here is on disk and needs nothing from the
@@ -2075,6 +2079,13 @@ impl App {
             *shared = eq_settings(&self.settings);
         }
         self.settings_dirty = true;
+    }
+
+    fn push_fade(&self) {
+        self.fade_ms.store(
+            crate::sink::clamp_fade_ms(self.settings.fade_ms),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     /// Note that a setting changed, so the file is saved shortly.
@@ -5680,6 +5691,7 @@ impl App {
             }
             Action::SettingsChanged => {
                 self.settings_dirty = true;
+                self.push_fade();
                 ctx.set_theme(match self.settings.theme {
                     ThemeChoice::Dark => egui::ThemePreference::Dark,
                     ThemeChoice::Light => egui::ThemePreference::Light,
@@ -5693,6 +5705,7 @@ impl App {
                     &self.settings,
                     std::sync::Arc::clone(&self.winamp.tap),
                     std::sync::Arc::clone(&self.winamp.eq),
+                    std::sync::Arc::clone(&self.fade_ms),
                 );
                 self.backend.send(Command::RestartEngine(config));
                 if self.local_ready {
@@ -6420,10 +6433,12 @@ pub fn engine_config(
     settings: &Settings,
     tap: std::sync::Arc<crate::vis::AudioTap>,
     eq: crate::eq::SharedEq,
+    fade_ms: crate::sink::FadeMs,
 ) -> EngineConfig {
     EngineConfig {
         tap,
         eq,
+        fade_ms,
         device_name: settings.device_name.trim().to_string(),
         bitrate_kbps: settings.bitrate,
         normalisation: settings.normalisation,

@@ -5,7 +5,7 @@
 //! and reports failures through the UI. Fastpotify can then remain available
 //! as a Connect remote until an output appears.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,8 +25,155 @@ pub const NAME: &str = "rodio";
 /// Told about output failures, with a message fit for the interface.
 pub type ErrorHook = Arc<dyn Fn(String) + Send + Sync>;
 
-/// Maximum queued rodio chunks before `write` blocks, about 200 ms of audio.
-const QUEUE_LIMIT: usize = 12;
+const QUEUE_MS: u32 = 200;
+
+const FADE_HEADROOM_MS: u32 = 60;
+
+pub const FADE_MS_CHOICES: [u32; 4] = [0, 100, 250, 500];
+
+pub type FadeMs = Arc<AtomicU32>;
+
+pub fn shared_fade(ms: u32) -> FadeMs {
+    Arc::new(AtomicU32::new(clamp_fade_ms(ms)))
+}
+
+pub fn clamp_fade_ms(ms: u32) -> u32 {
+    ms.min(*FADE_MS_CHOICES.last().unwrap_or(&0))
+}
+
+fn queue_ms(fade_ms: u32) -> u32 {
+    QUEUE_MS.max(clamp_fade_ms(fade_ms).saturating_add(FADE_HEADROOM_MS))
+}
+
+fn fade_out_frames(fade_ms: u32, sample_rate: u32, queued: u64) -> Option<u64> {
+    let frames = ramp_frames(fade_ms, sample_rate).min(queued);
+    (frames > 0).then_some(frames)
+}
+
+fn ramp_frames(ms: u32, sample_rate: u32) -> u64 {
+    u64::from(sample_rate) * u64::from(clamp_fade_ms(ms)) / 1000
+}
+
+struct Fade {
+    gain: AtomicU32,
+    step: AtomicU32,
+    target: AtomicU32,
+    left: AtomicU64,
+    played: AtomicU64,
+}
+
+impl Fade {
+    fn new() -> Self {
+        Self {
+            gain: AtomicU32::new(1.0f32.to_bits()),
+            step: AtomicU32::new(0.0f32.to_bits()),
+            target: AtomicU32::new(1.0f32.to_bits()),
+            left: AtomicU64::new(0),
+            played: AtomicU64::new(0),
+        }
+    }
+
+    fn gain(&self) -> f32 {
+        f32::from_bits(self.gain.load(Ordering::Relaxed))
+    }
+
+    fn set(&self, gain: f32) {
+        let gain = gain.clamp(0.0, 1.0);
+        self.gain.store(gain.to_bits(), Ordering::Relaxed);
+        self.target.store(gain.to_bits(), Ordering::Relaxed);
+        self.step.store(0.0f32.to_bits(), Ordering::Relaxed);
+        self.left.store(0, Ordering::Relaxed);
+    }
+
+    fn ramp(&self, target: f32, frames: u64) {
+        let target = target.clamp(0.0, 1.0);
+        if frames == 0 {
+            self.set(target);
+            return;
+        }
+        let step = (target - self.gain()) / frames as f32;
+        self.target.store(target.to_bits(), Ordering::Relaxed);
+        self.step.store(step.to_bits(), Ordering::Relaxed);
+        self.left.store(frames, Ordering::Relaxed);
+    }
+
+    fn advance(&self) -> f32 {
+        let gain = self.gain();
+        let left = self.left.load(Ordering::Relaxed);
+        let next = match left {
+            0 => gain,
+            1 => {
+                self.left.store(0, Ordering::Relaxed);
+                f32::from_bits(self.target.load(Ordering::Relaxed))
+            }
+            _ => {
+                self.left.store(left - 1, Ordering::Relaxed);
+                let step = f32::from_bits(self.step.load(Ordering::Relaxed));
+                (gain + step).clamp(0.0, 1.0)
+            }
+        };
+        self.gain.store(next.to_bits(), Ordering::Relaxed);
+        self.played.fetch_add(1, Ordering::Relaxed);
+        gain
+    }
+
+    fn played(&self) -> u64 {
+        self.played.load(Ordering::Relaxed)
+    }
+}
+
+struct Fading<S> {
+    inner: S,
+    fade: Arc<Fade>,
+    channels: rodio::ChannelCount,
+    left: rodio::ChannelCount,
+    gain: f32,
+}
+
+impl<S: rodio::Source> Fading<S> {
+    fn new(inner: S, fade: Arc<Fade>) -> Self {
+        let channels = inner.channels().max(1);
+        Self {
+            inner,
+            fade,
+            channels,
+            left: 0,
+            gain: 1.0,
+        }
+    }
+}
+
+impl<S: rodio::Source> Iterator for Fading<S> {
+    type Item = rodio::Sample;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.inner.next()?;
+        if self.left == 0 {
+            self.gain = self.fade.advance();
+            self.left = self.channels;
+        }
+        self.left -= 1;
+        Some(sample * self.gain)
+    }
+}
+
+impl<S: rodio::Source> rodio::Source for Fading<S> {
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+
+    fn channels(&self) -> rodio::ChannelCount {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+}
 
 /// Maximum time `stop` waits for the queue to drain.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -77,6 +224,7 @@ pub struct RodioSink {
     /// How much sound to ask the device to hold, in milliseconds. Taken
     /// when the stream opens, so a change lands with the next restart.
     buffer_ms: u32,
+    fade_ms: FadeMs,
 }
 
 struct Output {
@@ -93,11 +241,22 @@ struct Output {
     /// Whether this track has supplied audio since its last stop.
     fed: bool,
     last_write: Option<Instant>,
+    fade: Arc<Fade>,
+    appended: u64,
 }
 
 impl Output {
     fn failed(&self) -> bool {
         self.failed.load(Ordering::Relaxed)
+    }
+
+    fn queued_frames(&self) -> u64 {
+        self.appended.saturating_sub(self.fade.played())
+    }
+
+    fn queued_ms(&self) -> u32 {
+        let ms = self.queued_frames() * 1000 / u64::from(self.sample_rate.max(1));
+        ms.min(u64::from(u32::MAX)) as u32
     }
 }
 
@@ -107,6 +266,7 @@ impl RodioSink {
         on_error: ErrorHook,
         volume: Box<dyn VolumeGetter + Send>,
         buffer_ms: u32,
+        fade_ms: FadeMs,
     ) -> Self {
         Self {
             device,
@@ -116,7 +276,12 @@ impl RodioSink {
             applied_volume: -1.0,
             watch: None,
             buffer_ms,
+            fade_ms,
         }
+    }
+
+    fn fade_ms(&self) -> u32 {
+        clamp_fade_ms(self.fade_ms.load(Ordering::Relaxed))
     }
 
     /// Follows the system default output when no device is selected.
@@ -184,7 +349,15 @@ impl Sink for RodioSink {
         self.follow_default(true);
         self.ensure_open()?;
         self.apply_volume();
+        let fade_ms = self.fade_ms();
         if let Some(output) = &mut self.output {
+            let frames = ramp_frames(fade_ms, output.sample_rate);
+            if frames > 0 {
+                output.fade.set(0.0);
+                output.fade.ramp(1.0, frames);
+            } else {
+                output.fade.set(1.0);
+            }
             output.sink.play();
         }
         Ok(())
@@ -192,7 +365,13 @@ impl Sink for RodioSink {
 
     /// Never fails: librespot exits the process when a sink cannot stop.
     fn stop(&mut self) -> SinkResult<()> {
+        let fade_ms = self.fade_ms();
         if let Some(output) = &mut self.output {
+            if let Some(frames) =
+                fade_out_frames(fade_ms, output.sample_rate, output.queued_frames())
+            {
+                output.fade.ramp(0.0, frames);
+            }
             let deadline = Instant::now() + DRAIN_TIMEOUT;
             while !output.sink.empty() && !output.failed() && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
@@ -209,6 +388,7 @@ impl Sink for RodioSink {
             .samples()
             .map_err(|error| SinkError::OnWrite(error.to_string()))?;
         let samples = converter.f64_to_f32(samples);
+        let fade_ms = self.fade_ms();
         self.follow_default(false);
         self.ensure_open()?;
         self.apply_volume();
@@ -229,16 +409,21 @@ impl Sink for RodioSink {
                 .unwrap_or(0);
             log::warn!("audio queue ran dry; next packet arrived after {late_ms} ms");
         }
-        output.sink.append(rodio::buffer::SamplesBuffer::new(
+        output.appended += (samples.len() / NUM_CHANNELS as usize) as u64;
+        let buffer = rodio::buffer::SamplesBuffer::new(
             NUM_CHANNELS as rodio::ChannelCount,
             output.sample_rate as rodio::SampleRate,
             samples,
-        ));
+        );
+        output
+            .sink
+            .append(Fading::new(buffer, Arc::clone(&output.fade)));
         output.fed = true;
         output.last_write = Some(now);
         // Let rodio drain a little; without this the whole track would be
         // decoded into memory at once.
-        while output.sink.len() > QUEUE_LIMIT {
+        let limit = queue_ms(fade_ms);
+        while output.queued_ms() > limit {
             if output.failed() {
                 let message = "The audio output stopped working".to_string();
                 (self.on_error)(message.clone());
@@ -414,6 +599,8 @@ fn open_output(preferred: Option<&str>, buffer_ms: u32) -> Result<Output, OpenEr
         resampler,
         fed: false,
         last_write: None,
+        fade: Arc::new(Fade::new()),
+        appended: 0,
     })
 }
 
@@ -482,6 +669,98 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    #[test]
+    fn a_fade_out_reaches_silence_over_its_frames() {
+        let fade = Fade::new();
+        fade.ramp(0.0, 100);
+        for _ in 0..100 {
+            assert!(fade.advance() > 0.0, "every frame of the ramp is audible");
+        }
+        assert_eq!(fade.gain(), 0.0, "and the next one is silent");
+    }
+
+    #[test]
+    fn a_fade_in_reaches_full_volume_over_its_frames() {
+        let fade = Fade::new();
+        fade.set(0.0);
+        fade.ramp(1.0, 50);
+        assert_eq!(fade.advance(), 0.0, "it starts silent");
+        for _ in 0..49 {
+            fade.advance();
+        }
+        assert_eq!(fade.gain(), 1.0);
+    }
+
+    #[test]
+    fn a_finished_ramp_holds_at_its_target() {
+        let fade = Fade::new();
+        fade.ramp(0.0, 10);
+        for _ in 0..100 {
+            fade.advance();
+        }
+        assert_eq!(fade.gain(), 0.0);
+    }
+
+    #[test]
+    fn a_ramp_with_no_frames_lands_at_once() {
+        let fade = Fade::new();
+        fade.ramp(0.0, 0);
+        assert_eq!(fade.gain(), 0.0);
+        assert_eq!(fade.advance(), 0.0);
+    }
+
+    #[test]
+    fn the_ramp_steps_once_per_frame_not_once_per_sample() {
+        let fade = Arc::new(Fade::new());
+        fade.ramp(0.0, 4);
+        let buffer = rodio::buffer::SamplesBuffer::new(2, 44_100, vec![1.0f32; 8]);
+        let faded: Vec<f32> = Fading::new(buffer, Arc::clone(&fade)).collect();
+        assert_eq!(faded, vec![1.0, 1.0, 0.75, 0.75, 0.5, 0.5, 0.25, 0.25]);
+        assert_eq!(fade.played(), 4, "four frames, not eight samples");
+    }
+
+    #[test]
+    fn the_queue_holds_more_sound_than_the_longest_fade() {
+        assert_eq!(queue_ms(0), QUEUE_MS, "no fade, no extra buffering");
+        for ms in FADE_MS_CHOICES {
+            assert!(
+                queue_ms(ms) > ms,
+                "a {ms} ms fade needs more than {ms} ms of queued sound"
+            );
+        }
+        assert!(queue_ms(500) >= queue_ms(250), "longer fades queue more");
+    }
+
+    #[test]
+    fn a_fade_lasts_its_milliseconds_at_the_output_rate() {
+        assert_eq!(ramp_frames(250, 44_100), 11_025);
+        assert_eq!(ramp_frames(250, 48_000), 12_000);
+        assert_eq!(ramp_frames(0, 44_100), 0, "off means no ramp at all");
+    }
+
+    #[test]
+    fn a_fade_from_outside_the_choices_is_brought_back_in() {
+        assert_eq!(clamp_fade_ms(10_000), 500);
+        assert_eq!(clamp_fade_ms(250), 250);
+        assert_eq!(clamp_fade_ms(0), 0);
+    }
+
+    #[test]
+    fn a_pause_with_the_fade_off_does_not_ramp() {
+        assert_eq!(fade_out_frames(0, 44_100, 44_100), None);
+    }
+
+    #[test]
+    fn a_pause_with_nothing_queued_does_not_ramp() {
+        assert_eq!(fade_out_frames(250, 44_100, 0), None);
+    }
+
+    #[test]
+    fn a_pause_fades_over_the_sound_it_has() {
+        assert_eq!(fade_out_frames(250, 44_100, 44_100), Some(11_025));
+        assert_eq!(fade_out_frames(250, 44_100, 2_000), Some(2_000));
+    }
+
     /// A machine without audio (CI, a PC with nothing plugged in) must get
     /// an error and a message for the interface, never a panic. A machine
     /// with audio opens its default device.
@@ -494,6 +773,7 @@ mod tests {
             Arc::new(move |message| *store.lock().unwrap() = Some(message)),
             Box::new(librespot_playback::mixer::NoOpVolume),
             DEFAULT_BUFFER_MS,
+            shared_fade(250),
         );
         match sink.start() {
             Ok(()) => assert!(reported.lock().unwrap().is_none()),

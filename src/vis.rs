@@ -199,8 +199,9 @@ impl Sink for Tapped {
     }
 
     fn stop(&mut self) -> SinkResult<()> {
+        let stopped = self.inner.stop();
         self.tap.clear();
-        self.inner.stop()
+        stopped
     }
 
     fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {

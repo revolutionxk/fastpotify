@@ -55,6 +55,7 @@ pub struct EngineConfig {
     pub tap: Arc<AudioTap>,
     /// The equalizer's settings, shared with the window that sets them.
     pub eq: crate::eq::SharedEq,
+    pub fade_ms: crate::sink::FadeMs,
 }
 
 impl EngineConfig {
@@ -572,6 +573,7 @@ fn sink_builder(
     let buffer_ms = config.buffer_ms;
     let tap = Arc::clone(&config.tap);
     let eq = Arc::clone(&config.eq);
+    let fade_ms = Arc::clone(&config.fade_ms);
     let report: ErrorHook = Arc::new(move |message: String| {
         let snapshot = {
             let mut current = state.lock().unwrap_or_else(|p| p.into_inner());
@@ -609,7 +611,7 @@ fn sink_builder(
     let ceiling = mixer.get_soft_volume();
     (
         Box::new(move || {
-            let sink = Box::new(RodioSink::new(device, report, volume, buffer_ms));
+            let sink = Box::new(RodioSink::new(device, report, volume, buffer_ms, fade_ms));
             Box::new(Tapped::new(sink, tap, ceiling, false, eq, normalisation)) as Box<dyn Sink>
         }),
         Box::new(NoOpVolume),
@@ -1052,6 +1054,7 @@ mod tests {
             buffer_ms: crate::sink::DEFAULT_BUFFER_MS,
             tap: AudioTap::new(),
             eq: crate::eq::shared(),
+            fade_ms: crate::sink::shared_fade(0),
             device_name: "Fastpotify".into(),
             bitrate_kbps: 320,
             normalisation: false,

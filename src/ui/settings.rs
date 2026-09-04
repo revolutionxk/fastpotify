@@ -393,6 +393,40 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 });
             },
         );
+        if app
+            .settings
+            .platform_backend()
+            .as_deref()
+            .unwrap_or(crate::sink::NAME)
+            == crate::sink::NAME
+        {
+            widgets::setting_row(
+                ui,
+                &palette,
+                "Fade on pause",
+                "Music fades out when it pauses and back in when it resumes. Longer fades keep more sound buffered, so seeking answers a little later.",
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        let current = crate::sink::clamp_fade_ms(app.settings.fade_ms);
+                        for ms in crate::sink::FADE_MS_CHOICES.into_iter().rev() {
+                            let label = if ms == 0 {
+                                "Off".to_string()
+                            } else {
+                                format!("{ms} ms")
+                            };
+                            if theme::soft_button(ui, &palette, None, &label, current == ms)
+                                .clicked()
+                                && current != ms
+                            {
+                                app.settings.fade_ms = ms;
+                                changed = true;
+                            }
+                        }
+                    });
+                },
+            );
+        }
         widgets::setting_row(
             ui,
             &palette,
