@@ -2299,10 +2299,18 @@ impl App {
 
     /// The downloaded file for `url`, once the art cache has it.
     ///
-    /// The media controls are handed a file rather than the URL, so the disk
+    /// Windows and macOS are handed a file rather than the URL, so the disk
     /// is asked until the download lands and the answer remembered after
-    /// that; see `media_native::file_url` for why a URL will not do.
+    /// that; see `media_native::file_url` for why a URL will not do. The
+    /// player bar only ever draws the small cover, so on a miss the full-size
+    /// artwork is fetched here -- the one request the controls add.
+    ///
+    /// MPRIS passes `art_url` to the desktop, which fetches whatever it
+    /// wants: Linux needs no file and downloads nothing extra.
     fn media_art_file(&mut self, ctx: &egui::Context, url: &str) -> Option<PathBuf> {
+        if cfg!(target_os = "linux") {
+            return None;
+        }
         if let Some((known, file)) = &self.media_art
             && known == url
         {
@@ -8253,6 +8261,7 @@ mod tests {
     /// checking it, so a URL that does not answer aborts the process. The
     /// sync runs every frame, so the answer is remembered -- which means
     /// emptying the cache has to forget it, or the path outlives the file.
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn the_media_controls_only_hear_about_artwork_that_exists() {
         // #given
@@ -8286,6 +8295,49 @@ mod tests {
         assert_eq!(app.media_art, None, "a path into a deleted cache");
 
         let _ = std::fs::remove_file(&file);
+    }
+
+    /// MPRIS hands the desktop the artwork URL and reads no file, so the
+    /// controls have nothing to download for it: the full-size cover is
+    /// fetched on the platforms that load the image themselves.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_media_controls_are_told_no_file_and_download_nothing() {
+        // #given
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        let url = "https://i.scdn.co/image/abc";
+
+        // #then MPRIS is left to the URL alone
+        assert_eq!(app.media_art_file(&ctx, url), None);
+        assert!(
+            app.backend.art().prefetch(&ctx, url),
+            "a download was started for artwork nothing here reads"
+        );
+    }
+
+    /// Emptying the artwork cache has to let the cover come back. The files
+    /// are gone, so what the loader remembers of them goes too: an entry
+    /// left behind answers the next request with a file that is no longer
+    /// there, and the playing song stays coverless until the track changes.
+    #[test]
+    fn clearing_the_artwork_cache_lets_the_cover_come_back() {
+        // #given artwork that has already been asked for
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let url = "https://i.scdn.co/image/abc";
+        assert!(app.backend.art().prefetch(&ctx, url), "the first request");
+
+        // #when the artwork cache is emptied
+        app.actions.push(Action::ClearArtCache);
+        app.apply_actions(&ctx);
+
+        // #then the next request downloads it again
+        assert!(
+            app.backend.art().prefetch(&ctx, url),
+            "the loader still remembers artwork that has been deleted"
+        );
     }
 
     fn headless_app() -> App {
