@@ -261,6 +261,8 @@ pub struct App {
     pub show_pages: HashMap<String, ShowPage>,
     pub track_cache: HashMap<String, Track>,
     track_requests: HashSet<String>,
+    /// Built table rows, keyed by page. Capped; dropped on reset and eviction.
+    pub table_rows: HashMap<Page, TableRowsCache>,
 
     pub history: Vec<Page>,
     pub history_index: usize,
@@ -565,6 +567,7 @@ impl App {
             show_pages: HashMap::new(),
             track_cache: HashMap::new(),
             track_requests: HashSet::new(),
+            table_rows: HashMap::new(),
             history: vec![first_page],
             history_index: 0,
             saved: HashMap::new(),
@@ -1432,6 +1435,54 @@ impl App {
         self.devices_fetched_at = None;
         self.search.results = Loadable::NotLoaded;
         self.search.committed.clear();
+        self.table_rows.clear();
+    }
+
+    /// Drop table-row caches whose pages are gone, and cap what remains.
+    pub fn retain_table_rows(&mut self, current: &Page) {
+        const MAX_TABLE_ROW_CACHES: usize = 2;
+        self.table_rows.retain(|page, _| {
+            page == current
+                || match page {
+                    Page::Playlist(id) => self.playlist_pages.contains_key(id),
+                    Page::Album(id) => self.album_pages.contains_key(id),
+                    Page::LikedSongs | Page::TopSongs => true,
+                    _ => false,
+                }
+        });
+        if self.table_rows.len() <= MAX_TABLE_ROW_CACHES {
+            return;
+        }
+        let mut keep = HashSet::from([current.clone()]);
+        if let Some(page) = self.history.get(self.history_index) {
+            keep.insert(page.clone());
+        }
+        if self.history_index > 0
+            && let Some(page) = self.history.get(self.history_index - 1)
+        {
+            keep.insert(page.clone());
+        }
+        self.table_rows.retain(|page, _| keep.contains(page));
+        while self.table_rows.len() > MAX_TABLE_ROW_CACHES {
+            let drop = self
+                .table_rows
+                .keys()
+                .find(|page| *page != current)
+                .cloned();
+            match drop {
+                Some(page) => {
+                    self.table_rows.remove(&page);
+                }
+                None => break,
+            }
+        }
+    }
+
+    pub fn table_rows_retained_bytes(&self) -> usize {
+        self.table_rows
+            .values()
+            .map(TableRowsCache::retained_bytes)
+            .sum()
     }
 
     fn handle_local(&mut self, state: LocalState) {
@@ -2461,6 +2512,16 @@ impl App {
                 self.request_contains(vec![format!("spotify:playlist:{id}")]);
             }
             Page::Album(id) => {
+                if !self.album_pages.contains_key(&id) {
+                    self.load_generation = self.load_generation.wrapping_add(1);
+                    self.album_pages.insert(
+                        id.clone(),
+                        AlbumPage {
+                            generation: self.load_generation,
+                            ..Default::default()
+                        },
+                    );
+                }
                 let page = self.album_pages.entry(id.clone()).or_default();
                 if page.album.needs_load() {
                     page.album = Loadable::Loading;
@@ -2859,7 +2920,7 @@ impl App {
             if uris.is_empty() {
                 return;
             }
-            let (uris, index) = cap_uris(uris, index as u32);
+            let (uris, index) = cap_uris(&uris, index as u32);
             self.play_request(PlayRequest::tracks(uris).starting_at_index(index), false);
             return;
         }
@@ -4185,7 +4246,8 @@ impl App {
 
     pub fn open(&mut self, page: Page) {
         if *self.page() == page {
-            self.ensure_loaded(page);
+            self.ensure_loaded(page.clone());
+            self.retain_table_rows(&page);
             return;
         }
         self.history.truncate(self.history_index + 1);
@@ -4195,7 +4257,8 @@ impl App {
         }
         self.history_index = self.history.len() - 1;
         self.show_devices = false;
-        self.ensure_loaded(page);
+        self.ensure_loaded(page.clone());
+        self.retain_table_rows(&page);
     }
 
     /// Hands the app a Spotify link from outside, a canonical URI as
@@ -5235,14 +5298,16 @@ impl App {
                 if self.can_go_back() {
                     self.history_index -= 1;
                     let page = self.page().clone();
-                    self.ensure_loaded(page);
+                    self.ensure_loaded(page.clone());
+                    self.retain_table_rows(&page);
                 }
             }
             Action::Forward => {
                 if self.can_go_forward() {
                     self.history_index += 1;
                     let page = self.page().clone();
-                    self.ensure_loaded(page);
+                    self.ensure_loaded(page.clone());
+                    self.retain_table_rows(&page);
                 }
             }
             Action::PlayContext {
@@ -5285,7 +5350,7 @@ impl App {
                 if uris.is_empty() {
                     return;
                 }
-                let (uris, index) = cap_uris(uris, index);
+                let (uris, index) = cap_uris(&uris, index);
                 let request = PlayRequest::tracks(uris).starting_at_index(index);
                 self.play_request(request, false);
             }
@@ -5301,13 +5366,13 @@ impl App {
                     self.play_request(request, false);
                 }
                 RowContext::Uris(uris) => {
-                    let (uris, index) = cap_uris(uris, index);
+                    let (uris, index) = cap_uris(uris.as_ref(), index);
                     let request = PlayRequest::tracks(uris).starting_at_index(index);
                     self.play_request(request, false);
                 }
                 RowContext::Queue => self.play_queue_item(index as usize, uri),
                 RowContext::View { uris, context_uri } => {
-                    let (uris, index) = cap_uris(uris, index);
+                    let (uris, index) = cap_uris(uris.as_ref(), index);
                     let request = PlayRequest::tracks(uris).starting_at_index(index);
                     self.play_request(request, false);
                     self.note_recent_context(&context_uri);
@@ -6587,12 +6652,12 @@ fn autoplay_seed(
 }
 
 /// Caps large track lists at 500 items starting from the selected row.
-fn cap_uris(uris: Vec<String>, index: u32) -> (Vec<String>, u32) {
+fn cap_uris(uris: &[String], index: u32) -> (Vec<String>, u32) {
     const MAX: usize = 500;
     if uris.len() <= MAX {
-        return (uris, index);
+        return (uris.to_vec(), index);
     }
-    let start = (index as usize).min(uris.len() - 1);
+    let start = (index as usize).min(uris.len().saturating_sub(1));
     let end = (start + MAX).min(uris.len());
     (uris[start..end].to_vec(), 0)
 }
@@ -8143,6 +8208,41 @@ mod tests {
             app.connected_repaint_interval(),
             REMOTE_POLL_IDLE,
             "paused local UI wait is 20s (already the API interval); 4s was only a tighter wake-up"
+        );
+    }
+
+    #[test]
+    fn reset_data_drops_table_row_caches() {
+        let mut app = headless_app();
+        crate::ui::collection::cached_table_items(&mut app, Page::LikedSongs, 0, 0, 0, || {
+            vec![(
+                PlayableItem::Track(Track {
+                    name: "Hold".into(),
+                    uri: "spotify:track:hold".into(),
+                    ..Track::default()
+                }),
+                None,
+                None,
+            )]
+        });
+        assert!(!app.table_rows.is_empty());
+        app.reset_data();
+        assert!(app.table_rows.is_empty());
+        crate::ui::collection::cached_table_items(&mut app, Page::LikedSongs, 0, 0, 0, || {
+            vec![(
+                PlayableItem::Track(Track {
+                    name: "Fresh".into(),
+                    uri: "spotify:track:fresh".into(),
+                    ..Track::default()
+                }),
+                None,
+                None,
+            )]
+        });
+        let name = app.table_rows[&Page::LikedSongs].items[0].0.name();
+        assert_eq!(
+            name, "Fresh",
+            "reused revision 0 must not keep the old rows"
         );
     }
 

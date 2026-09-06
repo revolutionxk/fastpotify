@@ -802,6 +802,7 @@ mod tests {
     use crate::app::AppOptions;
     use crate::paths::AppDirs;
     use crate::settings::Settings;
+    use std::sync::Arc;
 
     fn accessible_app(name: &str) -> (egui::Context, App) {
         let root =
@@ -1019,7 +1020,7 @@ mod tests {
         use egui::accesskit::{Action as AccessibleAction, Role};
         let (ctx, mut app) = accessible_app("rows");
         let item = app.queue.get().unwrap().queue[0].clone();
-        let context = crate::model::RowContext::Uris(vec![item.uri().to_string(); 2]);
+        let context = crate::model::RowContext::Uris(Arc::from(vec![item.uri().to_string(); 2]));
         let label = format!("Play {}, {}", item.name(), item.subtitle());
         let mut render = |first, events| {
             app.actions.clear();
@@ -1113,7 +1114,7 @@ mod tests {
         use egui::accesskit::{Action as AccessibleAction, Role};
         let (ctx, mut app) = accessible_app("scroll");
         let item = app.queue.get().unwrap().queue[0].clone();
-        let context = crate::model::RowContext::Uris(vec![item.uri().to_string(); 20]);
+        let context = crate::model::RowContext::Uris(Arc::from(vec![item.uri().to_string(); 20]));
         let label = format!("Play {}, {}", item.name(), item.subtitle());
         let mut reached_last = false;
         let mut render = |events| {
@@ -1184,7 +1185,7 @@ mod tests {
         let (ctx, mut app) = accessible_app("queued-copy");
         let item = app.queue.get().unwrap().currently_playing.clone().unwrap();
         let contexts = [
-            RowContext::Uris(vec![item.uri().to_string()]),
+            RowContext::Uris(Arc::from([item.uri().to_string()])),
             RowContext::Queue,
         ];
         let label = format!("Play {}, {}", item.name(), item.subtitle());
