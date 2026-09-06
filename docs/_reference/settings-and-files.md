@@ -42,7 +42,9 @@ The last good playlist folder tree is kept in `session.json`, scoped to the
 account that supplied it. This keeps folders visible when local playback is
 temporarily unavailable. Live session data is still required for edit grants.
 
-The session also remembers the main window's position. On Windows, a position
+The session remembers separate positions for the main window and the Winamp
+mini player. The shade modes are kept in `settings.json`. Wayland compositors
+may ignore saved positions. On Windows, a position
 whose title bar is no longer on an available monitor's work area is discarded
 when reopening the window, keeping its initial on-screen placement instead.
 

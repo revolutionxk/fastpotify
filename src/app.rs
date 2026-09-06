@@ -689,7 +689,18 @@ impl App {
         }
         if self.settings.winamp_window {
             // The mini player sizes itself; the big window's geometry
-            // waits here for its return. Re-assert the on-top level over the
+            // waits here for its return. eframe may have restored the big
+            // window's fullscreen/maximized state before creating this one.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+            if let Some(pos) = self.winamp.restore_pos
+                && crate::window::can_restore(pos, ctx.pixels_per_point())
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                    pos[0], pos[1],
+                )));
+            }
+            // Re-assert the on-top level over the
             // first frames, once the window is mapped, because the level set
             // at creation does not stick on X11.
             if self.settings.winamp_on_top {
@@ -6910,6 +6921,37 @@ mod tests {
         app.settings.winamp_on_top = false;
         app.attach(&ctx);
         assert_eq!(app.winamp_level_reassert, 0);
+    }
+
+    #[test]
+    fn returning_to_the_mini_player_restores_its_position_and_shade() {
+        let mut app = headless_app();
+        app.settings.winamp_window = true;
+        app.settings.winamp_shaded = true;
+        app.winamp.last_pos = Some([300.0, 200.0]);
+        app.last_window_size = Some([1024.0, 768.0]);
+        app.last_window_pos = Some([100.0, 100.0]);
+
+        let main_ctx = egui::Context::default();
+        app.apply(Action::ToggleWinampWindow, &main_ctx);
+        app.attach(&main_ctx);
+        app.apply(Action::ToggleWinampWindow, &main_ctx);
+
+        let mini_ctx = egui::Context::default();
+        let mut output = mini_ctx.run_ui(Default::default(), |_ui| app.attach(&mini_ctx));
+        output.textures_delta.clear();
+        let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+        assert!(app.settings.winamp_window);
+        assert!(app.settings.winamp_shaded);
+        assert!(commands.contains(&egui::ViewportCommand::Fullscreen(false)));
+        assert!(commands.contains(&egui::ViewportCommand::Maximized(false)));
+        assert!(
+            commands.contains(&egui::ViewportCommand::OuterPosition(egui::pos2(
+                300.0, 200.0
+            )))
+        );
+        assert_eq!(app.session_window_size, Some([1024.0, 768.0]));
+        assert_eq!(app.session_window_pos, Some([100.0, 100.0]));
     }
 
     /// The song the last session ended on is shown, paused, at the position

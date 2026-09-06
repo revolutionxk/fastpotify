@@ -404,6 +404,7 @@ fn main() -> eframe::Result<()> {
             let guard = slot.lock().unwrap_or_else(|p| p.into_inner());
             MiniWindow::wanted(guard.as_ref().expect("application state present"))
         };
+        let mini_window = mini.is_some();
         #[cfg(feature = "demo")]
         let options = native_options(
             shot.is_some() && mini.is_none() && demo_inner.is_none(),
@@ -435,6 +436,7 @@ fn main() -> eframe::Result<()> {
                 Ok(Box::new(Shell {
                     app: Some(app),
                     slot: std::sync::Arc::clone(&creator_slot),
+                    mini_window,
                     #[cfg(feature = "demo")]
                     shot: creator_shot.clone(),
                 }))
@@ -543,6 +545,7 @@ struct MiniWindow {
     size: egui::Vec2,
     position: Option<[f32; 2]>,
     on_top: bool,
+    storage_path: std::path::PathBuf,
 }
 
 impl MiniWindow {
@@ -551,6 +554,7 @@ impl MiniWindow {
             size: fastpotify::ui::winamp::initial_size(&app.settings),
             position: app.winamp.restore_pos,
             on_top: app.settings.winamp_on_top,
+            storage_path: app.dirs.cache.join("winamp.ron"),
         })
     }
 }
@@ -583,6 +587,13 @@ fn native_options(
     mini: Option<MiniWindow>,
     inner_size: Option<[f32; 2]>,
 ) -> eframe::NativeOptions {
+    // The app keeps the mini player's position and shaded size separately.
+    // Its closing window must not replace the main window's eframe geometry.
+    let persist_window = mini.is_none();
+    // Disabling saving does not disable eframe's startup restore. Give the
+    // mini player its own path, and Shell disables its egui-memory saving too,
+    // so it neither reads the main window's geometry nor creates a state file.
+    let persistence_path = mini.as_ref().map(|mini| mini.storage_path.clone());
     let icon = if cfg!(target_os = "macos") {
         // macOS takes the dock icon from the bundle's .icns, which is the
         // 1024px drawing with the platform's rounding. Setting a window
@@ -639,6 +650,8 @@ fn native_options(
     };
     eframe::NativeOptions {
         viewport,
+        persist_window,
+        persistence_path,
         // A Wayland compositor stops sending frame callbacks to a hidden
         // window; waiting for vsync there would block the event loop.
         // Repaints are event-driven, so nothing spins.
@@ -653,6 +666,36 @@ fn native_options(
 #[cfg(test)]
 mod native_window_tests {
     use super::*;
+
+    #[test]
+    fn only_the_main_window_persists_framework_geometry() {
+        assert!(native_options(false, None, None).persist_window);
+        for shaded in [false, true] {
+            let settings = settings::Settings {
+                winamp_shaded: shaded,
+                skin_scale: Some(2),
+                ..Default::default()
+            };
+            let size = fastpotify::ui::winamp::initial_size(&settings);
+            let options = native_options(
+                false,
+                Some(MiniWindow {
+                    size,
+                    position: Some([300.0, 200.0]),
+                    on_top: false,
+                    storage_path: std::path::PathBuf::from("cache/winamp.ron"),
+                }),
+                None,
+            );
+            assert!(
+                !options.persist_window,
+                "mini geometry must not overwrite main"
+            );
+            assert_eq!(options.viewport.inner_size, Some(size));
+            assert_eq!(options.viewport.position, Some(egui::pos2(300.0, 200.0)));
+            assert!(options.persistence_path.is_some());
+        }
+    }
 
     #[test]
     fn main_window_uses_the_platform_decoration_policy() {
@@ -691,6 +734,8 @@ mod native_window_tests {
 struct Shell {
     app: Option<app::App>,
     slot: std::sync::Arc<std::sync::Mutex<Option<app::App>>>,
+    /// The mode this window opened in, even after an action switches modes.
+    mini_window: bool,
     /// A pending `--demo-shot` capture, if this is a screenshot run.
     #[cfg(feature = "demo")]
     shot: Option<Shot>,
@@ -754,6 +799,10 @@ impl Shell {
 }
 
 impl eframe::App for Shell {
+    fn persist_egui_memory(&self) -> bool {
+        !self.mini_window
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(app) = self.app.as_mut() {
             #[cfg(target_os = "macos")]

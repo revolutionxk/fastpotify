@@ -55,7 +55,8 @@ everyday use, and connection details.
 - **Light and dark**, or follow the system.
 - **Winamp mini player.** `Ctrl+M` opens a small player for classic `.wsz`
   skins, drawn at 1x to 4x scale. It includes a spectrum analyser, playlist,
-  and equalizer. Drop a skin from the
+  and equalizer. It keeps its shade mode and, where the desktop permits,
+  its own position when switching views. Drop a skin from the
   [Winamp Skin Museum](https://skins.webamp.org) on either window to add it.
 
   ![The mini player wearing the built-in skin](docs/assets/images/winamp.png)
