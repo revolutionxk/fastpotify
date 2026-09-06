@@ -187,6 +187,9 @@ those things, and [CONTRIBUTING.md](CONTRIBUTING.md) prohibits them.
 
 ## Keyboard shortcuts
 
+Hold `Shift` while turning the mouse wheel to scroll horizontal shelves,
+including Made for you and Recently played on Home.
+
 The main window exposes named playback controls, library and song rows,
 menus, sliders, and settings switches to screen readers. Use `Tab` and
 `Shift+Tab` to move focus, then `Enter` or `Space` to activate a control or
