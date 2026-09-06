@@ -24,7 +24,7 @@ pub fn cover(
     fallback: Icon,
 ) -> Rect {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    paint_cover(ui, palette, url, rect, radius, fallback);
+    paint_cover(ui, palette, url, rect, radius, fallback, None);
     rect
 }
 
@@ -35,9 +35,13 @@ pub fn paint_cover(
     rect: Rect,
     radius: f32,
     fallback: Icon,
+    art: Option<&crate::images::ArtLoader>,
 ) {
     if !ui.is_rect_visible(rect) {
         return;
+    }
+    if let (Some(url), Some(art)) = (url, art) {
+        art.touch(url);
     }
     let corner = CornerRadius::same(radius.min(127.0) as u8);
     let painter = ui.painter();
@@ -48,6 +52,14 @@ pub fn paint_cover(
         else {
             return false;
         };
+        if let Some(art) = art {
+            art.release_bytes(url);
+            art.note_decoded(
+                url,
+                texture.size.x.round() as usize,
+                texture.size.y.round() as usize,
+            );
+        }
 
         let image_aspect = texture.size.x / texture.size.y;
         let rect_aspect = rect.width() / rect.height();
@@ -789,6 +801,7 @@ fn track_row_contents(ui: &mut Ui, app: &mut App, row: TrackRow<'_>) -> Option<R
             } else {
                 Icon::Mic
             },
+            Some(app.backend.art()),
         );
         // Without a number column the cover carries the play control:
         // hover shows it, a click uses it, and what plays shows there.
@@ -1600,6 +1613,7 @@ pub fn card(
             image_rect,
             radius,
             if round { Icon::User } else { Icon::Music },
+            Some(app.backend.art()),
         );
         let text_left = rect.left() + PAD;
         let title_galley = ellipsized(ui, title, title_font, palette.text, text_width, 1);
