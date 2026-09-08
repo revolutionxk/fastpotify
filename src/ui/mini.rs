@@ -143,6 +143,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         8.0,
         Icon::Music,
         egui::Id::new("mini-art"),
+        Some(app.backend.art()),
     );
 
     if settings_open(ctx) {
@@ -262,7 +263,7 @@ fn panel(app: &mut App, ui: &mut egui::Ui, art: Rect) {
             ui.set_width(inner.width());
             theme::text(ui, label, theme::regular(13.0), palette.text);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if widgets::switch(ui, &palette, &mut flag).changed() {
+                if widgets::switch(ui, &palette, label, &mut flag).changed() {
                     picked = Some(index);
                 }
             });
@@ -429,9 +430,9 @@ fn volume(app: &mut App, ui: &mut egui::Ui, art: Rect, lit: f32) {
         &mut child,
         &app.palette,
         egui::Id::new("mini-volume"),
+        "Volume (%)",
         f32::from(shown) / 100.0,
         bar.width(),
-        app.palette.accent,
         None,
     ) {
         SliderEvent::Dragging(value) => {
@@ -539,9 +540,9 @@ fn progress(
         &mut child,
         &app.palette,
         egui::Id::new("mini-seek"),
+        "Playback position (%)",
         fraction,
         width,
-        app.palette.accent,
         None,
     ) {
         SliderEvent::Dragging(value) => app.seek_preview = Some(value),
@@ -581,7 +582,15 @@ fn coming_up(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
         );
         let cover =
             Rect::from_center_size(pos2(row.left() + 13.0, row.center().y), Vec2::splat(26.0));
-        widgets::paint_cover(ui, &palette, item.image(64), cover, 4.0, Icon::Music);
+        widgets::paint_cover(
+            ui,
+            &palette,
+            item.image(64),
+            cover,
+            4.0,
+            Icon::Music,
+            Some(app.backend.art()),
+        );
         let left = cover.right() + 8.0;
         let width = (row.right() - left).max(20.0);
         let galley =

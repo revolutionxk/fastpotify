@@ -19,6 +19,7 @@ pub enum MenuCommand {
     Queue,
     MiniPlayer,
     Settings,
+    CheckForUpdates,
     Shortcuts,
     Back,
     Forward,
@@ -92,6 +93,11 @@ mod mac_impl {
             #[unsafe(method(openSettings:))]
             fn open_settings(&self, _sender: &NSObject) {
                 push_command(MenuCommand::Settings);
+            }
+
+            #[unsafe(method(checkForUpdates:))]
+            fn check_for_updates(&self, _sender: &NSObject) {
+                push_command(MenuCommand::CheckForUpdates);
             }
 
             #[unsafe(method(playPause:))]
@@ -273,10 +279,18 @@ mod mac_impl {
             unsafe { objc2::msg_send![mtm.alloc::<FastpotifyMenuHandler>(), init] };
         let target: &NSObject = &handler;
 
-        // 1. Settings item in app menu (first menu)
+        // 1. Update and Settings items in app menu (first menu)
         if let Some(app_menu_item) = menubar.itemAtIndex(0)
             && let Some(app_menu) = app_menu_item.submenu()
         {
+            let update_item = create_item(
+                mtm,
+                ns_string!("Check for Updates…"),
+                Some(sel!(checkForUpdates:)),
+                ns_string!(""),
+                None,
+                Some(target),
+            );
             let settings_item = create_item(
                 mtm,
                 ns_string!("Settings…"),
@@ -286,8 +300,9 @@ mod mac_impl {
                 Some(target),
             );
             let sep = NSMenuItem::separatorItem(mtm);
-            app_menu.insertItem_atIndex(&settings_item, 1);
-            app_menu.insertItem_atIndex(&sep, 2);
+            app_menu.insertItem_atIndex(&update_item, 1);
+            app_menu.insertItem_atIndex(&settings_item, 2);
+            app_menu.insertItem_atIndex(&sep, 3);
         }
 
         // 2. File menu
