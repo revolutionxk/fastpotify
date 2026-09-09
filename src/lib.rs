@@ -22,6 +22,8 @@ pub mod mac_links;
 #[cfg(target_os = "macos")]
 pub mod mac_menu;
 #[cfg(target_os = "macos")]
+pub mod mac_titlebar;
+#[cfg(target_os = "macos")]
 pub mod mac_vibrancy;
 pub mod media;
 #[cfg(target_os = "linux")]

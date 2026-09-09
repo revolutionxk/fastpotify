@@ -123,7 +123,7 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAccessibility", "NSApplication", "NSEvent", "NSGraphics", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow", "NSWorkspace"] }
 # NSAppleEventManager and NSAppleEventDescriptor carry the Spotify links
 # macOS hands an app registered for the scheme (src/mac_links.rs).
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString", "NSUserDefaults"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store = { version = "1.1", default-features = false }
