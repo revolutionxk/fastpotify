@@ -21,6 +21,8 @@ pub mod mac_fonts;
 pub mod mac_links;
 #[cfg(target_os = "macos")]
 pub mod mac_menu;
+#[cfg(target_os = "macos")]
+pub mod mac_titlebar;
 pub mod media;
 #[cfg(target_os = "linux")]
 #[path = "mpris.rs"]

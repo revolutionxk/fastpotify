@@ -185,8 +185,31 @@ pub fn titlebar_drag(ui: &mut egui::Ui, rect: egui::Rect) {
         && ui.input(|input| input.pointer.primary_pressed())
     {
         // macOS needs the live mouse-down event rather than egui's drag threshold.
-        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        if let Some(command) = titlebar_press_command(ui.ctx()) {
+            ui.ctx().send_viewport_cmd(command);
+        }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn titlebar_press_command(ctx: &egui::Context) -> Option<egui::ViewportCommand> {
+    use crate::mac_titlebar::{self, DoubleClickAction};
+    if !mac_titlebar::double_click() {
+        return Some(egui::ViewportCommand::StartDrag);
+    }
+    match mac_titlebar::double_click_action() {
+        DoubleClickAction::Zoom => {
+            let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+            Some(egui::ViewportCommand::Maximized(!maximized))
+        }
+        DoubleClickAction::Minimize => Some(egui::ViewportCommand::Minimized(true)),
+        DoubleClickAction::Nothing => None,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn titlebar_press_command(_ctx: &egui::Context) -> Option<egui::ViewportCommand> {
+    Some(egui::ViewportCommand::StartDrag)
 }
 
 const WINDOW_RESIZE_BORDER: f32 = 5.0;
