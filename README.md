@@ -25,28 +25,40 @@ everyday use, and connection details.
   playback can try another endpoint.
 - **Controls other devices.** Move playback to a speaker, a phone, or
   another computer from the device picker, and keep controlling it: play,
-  pause, skip, seek, shuffle, repeat, volume.
+  pause, skip, seek, shuffle, repeat, volume. Long device lists scroll.
 - **Finds speakers on your network.** Fastpotify finds librespot, spotifyd,
   and supported hardware receivers over mDNS. Once connected, they appear as
-  Spotify Connect devices.
+  Spotify Connect devices. The picker uses responding receivers' names and
+  combines entries with the same device ID.
 - **Library.** Browse playlists, Liked Songs, saved albums, followed artists,
   podcasts, and saved episodes. Filter, pin, and reorder sidebar items.
+  Liked Songs reopens from an account-specific metadata cache. Older rows
+  refresh in the background while Like and Unlike take effect immediately.
+  Right-click album, artist, and podcast cards for their actions (on `main`,
+  after 0.7.1).
 - **Search** across songs, artists, albums, playlists, podcasts, and episodes,
-  with a top result and per-type views.
+  with a top result and per-type views. Right-click results and cards for their actions.
 - **Home** with Made for you, Recently played, your top artists and songs, and
-  recommendations.
+  recommendations. Right-click playlist shortcuts and shelf cards for their actions.
 - **Artist pages** with popular songs, a filterable discography, and related
   artists. **Album**, **playlist**, and **podcast** pages support playback
   from any row.
+  Discography and related-artist cards also have right-click menus (on `main`,
+  after 0.7.1).
+  Artist names in the player bar open their pages, including during local
+  playback before Web API metadata arrives (on `main`, after 0.7.1).
 - **Edit your playlists.** Create, rename, describe, reorder, and delete them.
   Add songs from a row menu, or drag a row or the currently playing song to a
   playlist in the sidebar. A playlist a friend shared with you takes songs too,
-  as Spotify's own apps allow.
+  as Spotify's own apps allow. Filter the **Add to playlist** menu by name to
+  find the destination quickly.
 - **Opens Spotify links.** Fastpotify registers for `spotify:` links, so a
   song, album, artist, playlist, or podcast shared from another app opens
   in it, whether it is running or not. `open.spotify.com` addresses go
   through the browser, which hands them to the same handler.
-- **Queue** as a side panel or a page; add anything to it from a row menu.
+- **Queue** as a side panel or a page; it names what is playing from, and
+  anything can be added to it from a row menu. **Add to queue** places songs
+  after those already queued and before the context continues.
 - **Resumes the last session.** On startup, the last song is paused where it
   stopped. Play resumes it, and the other playback controls work before it
   starts.
@@ -161,13 +173,28 @@ uses when another Spotify client is installed too.
 
 Press **Sign in with Spotify**. Your browser opens Spotify's consent page
 (Authorization Code with PKCE), so Fastpotify never sees your password. The
-app stores a refresh token in the platform's state directory
-(`~/.local/state/fastpotify` on Linux). You usually sign in once per machine.
+app keeps its grants in the system credential store: Secret Service on Linux,
+Keychain on macOS, and Credential Manager on Windows. You usually sign in once
+per machine. If the store is unavailable or locked, a new sign-in works for
+this session and Fastpotify explains that it could not save it.
 
 Playing music **on this computer** needs a second, one-time browser approval.
 Spotify handles streaming separately from library access. Start it from the
 device menu (**Set up playback here**) or Settings. It needs Spotify
-Premium, and librespot stores a reusable credential for later sessions.
+Premium. Its reusable credential uses the same protected storage, independently
+of the two Web API grants.
+
+Existing token files migrate after the protected write has been read back
+successfully. A failed migration keeps the original for recovery and reports
+an error. Sign-out removes shared, personal, and playback grants, including
+legacy files and pending writes. Non-secret revocation markers prevent a
+failed keychain deletion from silently restoring a signed-out session.
+See [credential storage and file locations](docs/_reference/settings-and-files.md).
+On `main`, after 0.7.1, Flatpak also preserves its fallback state directory
+across full quits, including on older Flatpak versions.
+
+Playback approval requests Spotify's streaming permission separately. A
+verified personal app can complete sign-in while the shared app is busy.
 
 The Web API uses a shared app by default. You can add a personal Spotify
 Development Mode app in Settings → Account for a separate quota. Fastpotify
@@ -306,6 +333,11 @@ PNG and exits, which is useful for reproducible interface screenshots.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull
 request. It covers project scope and required checks.
+
+Issues and discussions receive automated triage, including reassessment after
+new or edited comments. A rocket on the report or comment means its assessment
+completed successfully; it does not promise a reply or a fix. See
+[automated triage](CONTRIBUTING.md#automated-triage) for details.
 
 ## Acknowledgements
 

@@ -39,7 +39,7 @@ struct Cli {
     demo_page: Option<String>,
 
     /// Extra demo surfaces: a comma-separated list of `queue`, `playing-next`,
-    /// `devices`, `shortcuts`, `create`, `light`, `focus`.
+    /// `devices`, `shortcuts`, `create`, `light`, `focus`, `update`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,
@@ -367,9 +367,14 @@ fn main() -> eframe::Result<()> {
     #[allow(unused_mut)]
     let mut options = app::AppOptions::default();
     #[cfg(feature = "demo")]
+    if demo {
+        options.restore_sign_in = false;
+    }
+    #[cfg(feature = "demo")]
     if cli.demo_shot.is_some() {
         options = app::AppOptions {
             media_controls: false,
+            restore_sign_in: false,
             tray: false,
         };
     }

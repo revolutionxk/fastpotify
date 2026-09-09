@@ -18,10 +18,25 @@ local playback:
    account.
 3. **Local playback** uses
    [librespot](https://github.com/librespot-org/librespot). It needs one more
-   browser approval and stores its own reusable credential. Spotify Premium
+   browser approval and keeps an independent reusable credential. Spotify Premium
    is required.
 
-Local playback authorization stays separate from both Web API grants.
+Local playback authorization stays separate from both Web API grants. Its
+browser approval requests only the streaming permission and always shows the
+consent dialog. The playback session uses the account ID verified by either
+Web API grant. A verified personal app can complete sign-in while the shared
+app's verification is still waiting.
+
+On `main`, for the release after 0.7.1, local playback retains the artist IDs
+already supplied by librespot. Artist links in the player bar work before the
+Web API's track metadata arrives, without an extra request.
+
+On `main`, for the release after 0.7.1, requests that need a grant still being
+verified wait for it instead of showing "not signed in". Sign-out cancels
+pending requests, and their late results cannot undo a new sign-in. If Spotify
+rejects a saved refresh grant, Fastpotify removes that grant and asks for a new
+browser approval. Upgrading to protected storage does not itself require
+signing in again.
 
 By default, Fastpotify uses the public app shared with spotify-player, ncspot,
 and Omarchy Spotify. Spotify divides its quota among all users. A personal app
@@ -30,9 +45,13 @@ adds a separate Development Mode quota. See
 
 ## What the client stores
 
-- Shared and personal Web API refresh tokens, plus librespot's credential, in
-  the state directory with owner-only permissions
-  ([file locations](/settings-and-files/)).
+- On `main`, for the release after 0.7.1, shared and personal Web API grants
+  and the reusable playback credential use the platform credential store:
+  Secret Service on Linux, Keychain on macOS, and Credential Manager on
+  Windows. Librespot retains its reusable credential in memory; Fastpotify
+  owns persistence. Flatpak can talk to `org.freedesktop.secrets` for this.
+  Version 0.7.1 still uses the older unencrypted files.
+  See [migration, sign-out, and storage protection](/settings-and-files/).
 - Downloaded audio and artwork, in the cache directory, within the budget
   you set.
 - The first time MilkDrop opens with an empty preset folder, the two projectM
@@ -44,6 +63,12 @@ adds a separate Development Mode quota. See
   carries the Spotify artwork URL for the desktop to resolve and asks for
   nothing extra.
 - Lyrics, in the cache directory, for a month.
+- Liked Songs metadata, scoped to the verified account, in the cache directory.
+  This behavior is on `main`, for the release after 0.7.1.
+  Cached pages less than 15 minutes old need no repeat request. Older cached
+  prefixes refresh through the existing Web API grant, one page at a time,
+  while the saved rows remain visible. Manual refresh starts immediately.
+  Like and Unlike are kept over lagging reads until Spotify confirms them.
 - Fastpotify has no telemetry, analytics, or hosted service. When the lyrics
   panel is open and Spotify has no lyrics, it sends the track's artist, title,
   album, and length to [lrclib.net](https://lrclib.net). It also checks
@@ -76,7 +101,14 @@ Spotify's device list only shows signed-in receivers. A new librespot or
 spotifyd receiver is therefore invisible to the Web API.
 
 Receivers announce themselves over mDNS as `_spotify-connect._tcp` and answer
-a small HTTP interface. Fastpotify encrypts the stored librespot credential
+a small HTTP interface. Opening or refreshing the picker first reads
+`getInfo` to find each receiver's name and device ID. These probes run off
+the UI thread, four at a time, with a two-second limit per receiver and six
+seconds overall after discovery. Only responding receivers with a name and
+ID are offered. Matching IDs are combined; separate devices can have the
+same name. These reads send no account credential.
+
+When a receiver is selected, Fastpotify encrypts the stored librespot credential
 with a receiver-specific key and a key from a Diffie-Hellman exchange. The
 encrypted value only works for that receiver and exchange. Fastpotify does not
 save another copy of the credential.

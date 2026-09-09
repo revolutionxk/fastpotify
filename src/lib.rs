@@ -5,11 +5,13 @@ pub mod app;
 pub mod auth;
 pub mod backend;
 pub mod bidi;
+pub mod credentials;
 #[cfg(any(test, feature = "demo"))]
 pub mod demo;
 pub mod eq;
 pub mod history;
 pub mod images;
+pub mod liked;
 pub mod limiter;
 pub mod link;
 pub mod lyrics;

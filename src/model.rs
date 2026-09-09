@@ -519,6 +519,9 @@ pub struct PlaylistPage {
     /// Snapshot returned by the latest successful write. A lagging metadata
     /// read must not replace it with the snapshot from before that write.
     pub optimistic_snapshot: Option<String>,
+    /// Writes still awaiting a result. Keep their optimistic rows in memory
+    /// even when navigation moves beyond the usual page-cache limit.
+    pub pending_writes: usize,
     /// Number of immediate metadata reads made while Spotify still reported
     /// the pre-write snapshot.
     pub snapshot_rechecks: u8,
@@ -637,6 +640,14 @@ pub struct DragTrack {
     pub item: PlayableItem,
     /// Source playlist ID and row index for moves within an editable playlist.
     pub from: Option<(String, u32)>,
+}
+
+/// Where the playing songs come from, as the queue's header names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayingFrom {
+    pub name: String,
+    /// The page that opens on click. A song radio has none.
+    pub page: Option<Page>,
 }
 
 /// Sidebar entry held during a drag.
