@@ -5,8 +5,8 @@
 //! and reports failures through the UI. Fastpotify can then remain available
 //! as a Connect remote until an output appears.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,7 @@ use librespot_playback::convert::Converter;
 use librespot_playback::decoder::AudioPacket;
 use librespot_playback::mixer::VolumeGetter;
 use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
+use rodio::Source;
 
 use crate::resample::Resampler;
 
@@ -31,6 +32,9 @@ const QUEUE_LIMIT: usize = 12;
 /// Maximum time `stop` waits for the queue to drain.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Length of each side of an interrupted-track fade.
+const INTERRUPT_FADE: Duration = Duration::from_millis(10);
+
 /// How often playback looks at which output the system calls its default.
 const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -43,6 +47,193 @@ pub const DEFAULT_BUFFER_MS: u32 = 100;
 /// Allowed Windows device buffer range. Lower values can click; higher values
 /// delay playback controls.
 pub const BUFFER_MS_RANGE: std::ops::RangeInclusive<u32> = 20..=500;
+
+/// Coordinates an explicit track replacement with the audio thread.
+///
+/// librespot deliberately leaves a gapless sink running between tracks. That
+/// is right when one track reaches its end, but an explicit skip otherwise
+/// leaves the old queued audio in front of the replacement. The old signal is
+/// faded on rodio's output thread before its queue is discarded; writes stay
+/// gated until librespot reports that the replacement track is loaded.
+pub struct AudioControl {
+    target: Mutex<AudioTarget>,
+    waiting_for_track: AtomicBool,
+    reset_output: AtomicBool,
+    buffer_ms: u32,
+}
+
+#[derive(Default)]
+struct AudioTarget {
+    sink: Weak<rodio::Sink>,
+    envelope: Option<Arc<Envelope>>,
+}
+
+impl AudioControl {
+    pub fn new(buffer_ms: u32) -> Arc<Self> {
+        Arc::new(Self {
+            target: Mutex::new(AudioTarget::default()),
+            waiting_for_track: AtomicBool::new(false),
+            reset_output: AtomicBool::new(false),
+            buffer_ms: buffer_ms.clamp(*BUFFER_MS_RANGE.start(), *BUFFER_MS_RANGE.end()),
+        })
+    }
+
+    /// Fades and discards the current output before a user-requested track
+    /// change. Repeated skips share the same handoff.
+    pub fn interrupt(&self) {
+        if self.waiting_for_track.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (sink, envelope) = {
+            let target = self.target.lock().unwrap_or_else(PoisonError::into_inner);
+            (target.sink.upgrade(), target.envelope.clone())
+        };
+        if let (Some(sink), Some(envelope)) = (&sink, &envelope) {
+            envelope.fade_out();
+            let wait =
+                Duration::from_millis(u64::from(self.buffer_ms)).saturating_add(INTERRUPT_FADE * 2);
+            let deadline = Instant::now() + wait;
+            while !envelope.silent() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            // Unlike `clear`, this does not wait for every queued source.
+            // The replacement gets a fresh rodio sink on its first write.
+            sink.stop();
+        }
+        self.reset_output.store(true, Ordering::SeqCst);
+    }
+
+    /// Opens the write gate once librespot has left the old decoder behind.
+    pub fn track_changed(&self) {
+        self.waiting_for_track.store(false, Ordering::SeqCst);
+    }
+
+    /// Releases the gate if the requested replacement stopped instead.
+    pub fn stopped(&self) {
+        self.waiting_for_track.store(false, Ordering::SeqCst);
+    }
+
+    fn waiting_for_track(&self) -> bool {
+        self.waiting_for_track.load(Ordering::SeqCst)
+    }
+
+    fn take_reset(&self) -> bool {
+        self.reset_output.swap(false, Ordering::SeqCst)
+    }
+
+    fn register(&self, sink: &Arc<rodio::Sink>, envelope: Arc<Envelope>) {
+        let mut target = self.target.lock().unwrap_or_else(PoisonError::into_inner);
+        target.sink = Arc::downgrade(sink);
+        target.envelope = Some(envelope);
+    }
+}
+
+/// A sample-clocked gain shared by every chunk in one rodio queue.
+struct Envelope {
+    level: AtomicU32,
+    target: AtomicU32,
+    frames: u32,
+}
+
+impl Envelope {
+    fn full(sample_rate: u32) -> Arc<Self> {
+        let frames = fade_frames(sample_rate);
+        Arc::new(Self {
+            level: AtomicU32::new(frames),
+            target: AtomicU32::new(frames),
+            frames,
+        })
+    }
+
+    fn fade_in(sample_rate: u32) -> Arc<Self> {
+        let frames = fade_frames(sample_rate);
+        Arc::new(Self {
+            level: AtomicU32::new(0),
+            target: AtomicU32::new(frames),
+            frames,
+        })
+    }
+
+    fn fade_out(&self) {
+        self.target.store(0, Ordering::Relaxed);
+    }
+
+    fn silent(&self) -> bool {
+        self.level.load(Ordering::Relaxed) == 0
+    }
+
+    /// Returns this frame's gain, then moves one frame toward the target.
+    fn next_gain(&self) -> f32 {
+        let level = self.level.load(Ordering::Relaxed);
+        let target = self.target.load(Ordering::Relaxed);
+        let next = match level.cmp(&target) {
+            std::cmp::Ordering::Less => level + 1,
+            std::cmp::Ordering::Greater => level - 1,
+            std::cmp::Ordering::Equal => level,
+        };
+        self.level.store(next, Ordering::Relaxed);
+        level as f32 / self.frames as f32
+    }
+}
+
+fn fade_frames(sample_rate: u32) -> u32 {
+    (u64::from(sample_rate) * INTERRUPT_FADE.as_millis() as u64 / 1_000).max(1) as u32
+}
+
+/// Applies the shared interruption envelope on rodio's output thread, so it
+/// can smooth audio that was already queued when the user changes track.
+struct TransitionSource {
+    inner: rodio::buffer::SamplesBuffer,
+    envelope: Arc<Envelope>,
+    channel: usize,
+    gain: f32,
+}
+
+impl TransitionSource {
+    fn new(inner: rodio::buffer::SamplesBuffer, envelope: Arc<Envelope>) -> Self {
+        Self {
+            inner,
+            envelope,
+            channel: 0,
+            gain: 1.0,
+        }
+    }
+}
+
+impl Iterator for TransitionSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.inner.next()?;
+        if self.channel == 0 {
+            self.gain = self.envelope.next_gain();
+        }
+        self.channel = (self.channel + 1) % NUM_CHANNELS as usize;
+        Some(sample * self.gain)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl Source for TransitionSource {
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+
+    fn channels(&self) -> rodio::ChannelCount {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+}
 
 /// The buffer to ask the device for, in frames.
 ///
@@ -77,10 +268,11 @@ pub struct RodioSink {
     /// How much sound to ask the device to hold, in milliseconds. Taken
     /// when the stream opens, so a change lands with the next restart.
     buffer_ms: u32,
+    control: Arc<AudioControl>,
 }
 
 struct Output {
-    sink: rodio::Sink,
+    sink: Arc<rodio::Sink>,
     _stream: rodio::OutputStream,
     /// The name of the device the stream was opened on.
     device_name: Option<String>,
@@ -90,6 +282,7 @@ struct Output {
     /// not Spotify's.
     sample_rate: u32,
     resampler: Option<Resampler>,
+    envelope: Arc<Envelope>,
     /// Whether this track has supplied audio since its last stop.
     fed: bool,
     last_write: Option<Instant>,
@@ -107,6 +300,7 @@ impl RodioSink {
         on_error: ErrorHook,
         volume: Box<dyn VolumeGetter + Send>,
         buffer_ms: u32,
+        control: Arc<AudioControl>,
     ) -> Self {
         Self {
             device,
@@ -116,6 +310,7 @@ impl RodioSink {
             applied_volume: -1.0,
             watch: None,
             buffer_ms,
+            control,
         }
     }
 
@@ -162,7 +357,7 @@ impl RodioSink {
         if self.output.is_some() {
             return Ok(());
         }
-        match open_output(self.device.as_deref(), self.buffer_ms) {
+        match open_output(self.device.as_deref(), self.buffer_ms, &self.control) {
             Ok(output) => {
                 self.output = Some(output);
                 self.applied_volume = -1.0;
@@ -209,8 +404,25 @@ impl Sink for RodioSink {
             .samples()
             .map_err(|error| SinkError::OnWrite(error.to_string()))?;
         let samples = converter.f64_to_f32(samples);
+        if self.control.waiting_for_track() {
+            return Ok(());
+        }
         self.follow_default(false);
         self.ensure_open()?;
+        if self.control.take_reset()
+            && let Some(output) = &mut self.output
+        {
+            let sink = Arc::new(rodio::Sink::connect_new(output._stream.mixer()));
+            let envelope = Envelope::fade_in(output.sample_rate);
+            self.control.register(&sink, Arc::clone(&envelope));
+            output.sink = sink;
+            output.envelope = envelope;
+            output.resampler =
+                Resampler::new(SAMPLE_RATE, output.sample_rate, NUM_CHANNELS as usize);
+            output.fed = false;
+            output.last_write = None;
+            self.applied_volume = -1.0;
+        }
         self.apply_volume();
         let Some(output) = &mut self.output else {
             return Err(SinkError::NotConnected(
@@ -229,11 +441,14 @@ impl Sink for RodioSink {
                 .unwrap_or(0);
             log::warn!("audio queue ran dry; next packet arrived after {late_ms} ms");
         }
-        output.sink.append(rodio::buffer::SamplesBuffer::new(
+        let source = rodio::buffer::SamplesBuffer::new(
             NUM_CHANNELS as rodio::ChannelCount,
             output.sample_rate as rodio::SampleRate,
             samples,
-        ));
+        );
+        output
+            .sink
+            .append(TransitionSource::new(source, Arc::clone(&output.envelope)));
         output.fed = true;
         output.last_write = Some(now);
         // Let rodio drain a little; without this the whole track would be
@@ -366,7 +581,11 @@ enum OpenError {
     Stream(#[from] rodio::StreamError),
 }
 
-fn open_output(preferred: Option<&str>, buffer_ms: u32) -> Result<Output, OpenError> {
+fn open_output(
+    preferred: Option<&str>,
+    buffer_ms: u32,
+    control: &AudioControl,
+) -> Result<Output, OpenError> {
     let host = cpal::default_host();
     let device = match preferred.map(str::trim).filter(|name| !name.is_empty()) {
         Some(name) => {
@@ -404,7 +623,9 @@ fn open_output(preferred: Option<&str>, buffer_ms: u32) -> Result<Output, OpenEr
             "the output runs at {sample_rate} Hz; the music is converted from {SAMPLE_RATE} Hz"
         );
     }
-    let sink = rodio::Sink::connect_new(stream.mixer());
+    let sink = Arc::new(rodio::Sink::connect_new(stream.mixer()));
+    let envelope = Envelope::full(sample_rate);
+    control.register(&sink, Arc::clone(&envelope));
     Ok(Output {
         sink,
         _stream: stream,
@@ -412,6 +633,7 @@ fn open_output(preferred: Option<&str>, buffer_ms: u32) -> Result<Output, OpenEr
         failed,
         sample_rate,
         resampler,
+        envelope,
         fed: false,
         last_write: None,
     })
@@ -494,6 +716,7 @@ mod tests {
             Arc::new(move |message| *store.lock().unwrap() = Some(message)),
             Box::new(librespot_playback::mixer::NoOpVolume),
             DEFAULT_BUFFER_MS,
+            AudioControl::new(DEFAULT_BUFFER_MS),
         );
         match sink.start() {
             Ok(()) => assert!(reported.lock().unwrap().is_none()),
@@ -503,5 +726,33 @@ mod tests {
             Err(other) => panic!("unexpected error: {other}"),
         }
         assert!(sink.stop().is_ok());
+    }
+
+    #[test]
+    fn an_interrupted_signal_fades_out_and_a_replacement_fades_in() {
+        let rate = 1_000;
+        let frames = fade_frames(rate) as usize;
+        let samples = vec![1.0; (frames + 2) * NUM_CHANNELS as usize];
+
+        let outgoing = Envelope::full(rate);
+        outgoing.fade_out();
+        let faded: Vec<_> = TransitionSource::new(
+            rodio::buffer::SamplesBuffer::new(NUM_CHANNELS.into(), rate, samples.clone()),
+            outgoing,
+        )
+        .collect();
+        assert_eq!(faded[0], 1.0);
+        assert_eq!(faded[1], 1.0);
+        assert_eq!(faded[frames * NUM_CHANNELS as usize], 0.0);
+
+        let incoming = Envelope::fade_in(rate);
+        let faded: Vec<_> = TransitionSource::new(
+            rodio::buffer::SamplesBuffer::new(NUM_CHANNELS.into(), rate, samples),
+            incoming,
+        )
+        .collect();
+        assert_eq!(faded[0], 0.0);
+        assert_eq!(faded[1], 0.0);
+        assert_eq!(faded[frames * NUM_CHANNELS as usize], 1.0);
     }
 }

@@ -21,6 +21,8 @@ everyday use, and connection details.
   device. Select it from your phone or play music in the app. Playback is
   gapless and supports up to 320 kbps, with
   optional volume normalisation and an on-disk audio cache.
+  Stalled Spotify connections time out after five seconds per attempt so
+  playback can try another endpoint.
 - **Controls other devices.** Move playback to a speaker, a phone, or
   another computer from the device picker, and keep controlling it: play,
   pause, skip, seek, shuffle, repeat, volume.
@@ -53,7 +55,8 @@ everyday use, and connection details.
 - **Light and dark**, or follow the system.
 - **Winamp mini player.** `Ctrl+M` opens a small player for classic `.wsz`
   skins, drawn at 1x to 4x scale. It includes a spectrum analyser, playlist,
-  and equalizer. Drop a skin from the
+  and equalizer. It keeps its shade mode and, where the desktop permits,
+  its own position when switching views. Drop a skin from the
   [Winamp Skin Museum](https://skins.webamp.org) on either window to add it.
 
   ![The mini player wearing the built-in skin](docs/assets/images/winamp.png)
@@ -133,11 +136,21 @@ vcpkg (`vcpkg install glew:x64-windows-static`, with
 With [Nix](https://nixos.org), `nix develop` provides all of it, along with
 the exact toolchain `rust-toolchain.toml` pins.
 
+On macOS, the flake also exposes `packages.<system>.fastpotify-app`, an
+ad-hoc signed `Fastpotify.app` bundle for the Dock, Launch Services, and
+`spotify:` links. With nix-darwin, add it to `environment.systemPackages`
+and link `"/Applications"` through `environment.pathsToLink`; with Home
+Manager, `home.packages` is enough, as its darwin support links the bundle
+into `~/Applications`.
+
 Fastpotify uses system fonts for scripts not covered by its interface font,
 including Chinese, Japanese, Korean, Arabic, Hebrew, Thai, and Indic scripts.
-macOS and Windows include common fonts. On Linux, install `noto-fonts` and
-`noto-fonts-cjk` (Arch) or `fonts-noto` and `fonts-noto-cjk` (Debian or
-Ubuntu) if titles appear as empty boxes.
+On macOS it draws each of them with the face the system itself uses, in the
+language order set in System Settings, so Chinese titles follow the
+Traditional or Simplified preference set there. Windows includes common
+fonts. On Linux, install `noto-fonts` and `noto-fonts-cjk` (Arch) or
+`fonts-noto` and `fonts-noto-cjk` (Debian or Ubuntu) if titles appear as
+empty boxes.
 
 A desktop entry is provided in `packaging/applications/fastpotify.desktop`.
 It registers Fastpotify for `spotify:` links; `xdg-mime default
@@ -175,6 +188,16 @@ those things, and [CONTRIBUTING.md](CONTRIBUTING.md) prohibits them.
 
 ## Keyboard shortcuts
 
+Hold `Shift` while turning the mouse wheel to scroll horizontal shelves,
+including Made for you and Recently played on Home.
+
+The main window exposes named playback controls, library and song rows,
+menus, sliders, and settings switches to screen readers. Use `Tab` and
+`Shift+Tab` to move focus, then `Enter` or `Space` to activate a control or
+play a focused song. Left and right arrows adjust a focused volume or seek
+slider. Windows testing with NVDA and accessibility for Winamp skins are
+still in progress.
+
 | Shortcut | What it does |
 | --- | --- |
 | `Space` | Play or pause |
@@ -182,6 +205,7 @@ those things, and [CONTRIBUTING.md](CONTRIBUTING.md) prohibits them.
 | `Shift+←` / `Shift+→` | Seek 10 seconds |
 | `Ctrl+↑` / `Ctrl+↓` | Volume |
 | `M` | Mute |
+| `B` | Like or unlike the playing song |
 | `S` / `R` | Shuffle / cycle repeat |
 | `Q` | Queue panel |
 | `Ctrl+F` or `/` | Search |
@@ -247,6 +271,8 @@ autoplay, gapless playback, the audio backend (PulseAudio/PipeWire or ALSA on
 Linux), audio cache size, theme, sidebar state, whether pages take colour
 from artwork, and the mini player's skin and size.
 Playback settings apply when you press **Apply and restart playback**.
+You can also check for a new release from Settings. On macOS, the same command
+is in the application menu.
 
 Caches (audio, artwork) live under the cache directory and can be deleted at
 any time without signing you out.
@@ -274,6 +300,7 @@ cargo run --features demo -- --demo --demo-page playlist:pl1 --demo-show queue
 
 Demo mode never writes settings. `--demo-shot <PATH>` writes the window to a
 PNG and exits, which is useful for reproducible interface screenshots.
+`--demo-size WIDTHxHEIGHT` sets the window size for that shot.
 
 ## Contributing
 
